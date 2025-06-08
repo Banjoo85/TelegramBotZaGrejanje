@@ -271,12 +271,11 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         logger.debug(f"Izabrana opcija menija: {menu_option}. user_data[{user_id}]: {user_data[user_id]}")
         
         if menu_option == 'quote':
-            # === NOVA IZMENA: POSLATI NOVU PORUKU UMESTO EDITOVANJA ===
             # Ukloni dugmad sa stare poruke
             await query.edit_message_reply_markup(reply_markup=None) 
             
-            # Pošalji novu poruku sa potvrdom
-            await query.message.reply_text(text=messages["quote_request_acknowledgement"], parse_mode=ParseMode.MARKDOWN_V2)
+            # --- IZMENJENA LINIJA: KORISTITE context.bot.send_message ---
+            await context.bot.send_message(chat_id=user_id, text=messages["quote_request_acknowledgement"], parse_mode=ParseMode.MARKDOWN_V2)
             
             # Onda prikaži sledeći meni
             await choose_installation_type_menu(update, context, user_id)
