@@ -735,10 +735,7 @@ async def request_sketch_entry(update: Update, context: ContextTypes.DEFAULT_TYP
         user_data[user_id] = {'lang': 'en'} # Fallback
         logger.warning(f"user_data[{user_id}] nije pronađen u 'request_sketch_entry'. Inicijalizovan.")
         messages = load_messages(user_data[user_id]['lang'])
-        await update.effective_chat.send_message(
-                messages.get("error_occurred", "An unexpected error occurred. Please try again or type /start.")
-                # Nema parse_mode parametra, jer ova poruka ne zahteva Markdown formatiranje
-            )
+        await update.effective_chat.send_message(text=messages["session_expired_restart_needed"], parse_mode=ParseMode.MARKDOWN_V2)
         return ConversationHandler.END # Završava konverzaciju i vraća na početak
 
     messages = load_messages(user_data[user_id]['lang'])
@@ -854,42 +851,60 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
     """Log the error and send a telegram message to notify the developer."""
     logger.error("Exception while handling an update:", exc_info=context.error)
 
-    # Obavestite korisnika ako je moguće
+    # Obavestite korisnika ako je moguće (ovde ne treba parse_mode)
     if update and update.effective_chat:
         try:
-            # Učitajte poruke na osnovu jezika korisnika ako je dostupan, inače engleski
             user_id = update.effective_user.id if update.effective_user else None
             lang = user_data.get(user_id, {}).get('lang', 'en') if user_id else 'en'
             messages = load_messages(lang)
             
             await update.effective_chat.send_message(
-                messages.get("error_occurred", "An unexpected error occurred. Please try again or type /start."),
-                parse_mode=ParseMode.MARKDOWN_V2
+                messages.get("error_occurred", "An unexpected error occurred. Please try again or type /start.")
+                # Nema parse_mode ovde, jer ova poruka ne zahteva Markdown formatiranje
             )
         except Exception as e:
-            logger.error(f"Failed to send error message to user: {e}")
+            logger.error(f"Failed to send error message to user (user notification part): {e}")
 
     # Opcionalno: Pošaljite grešku sebi (administratoru)
     if DEVELOPER_CHAT_ID:
         try:
             tb_list = traceback.format_exception(None, context.error, context.error.__traceback__)
             tb_string = "".join(tb_list)
-            update_str = update.to_dict() if isinstance(update, Update) else str(update)
+            
+            # Pokušajte da konvertujete update objekat u string sigurnije
+            update_str_safe = ""
+            if isinstance(update, Update):
+                try:
+                    update_str_safe = json.dumps(update.to_dict(), indent=2, ensure_ascii=False) # ensure_ascii=False za bolje prikazivanje
+                except Exception:
+                    update_str_safe = str(update)
+            else:
+                update_str_safe = str(update)
+
+            # Koristite MARKDOWN_V2 sa triple backticks za sigurnost
+            # Svi specijalni karakteri unutar ``` blokova su automatski escapovani
             message = (
                 f"An exception was raised while handling an update\n"
-                f"<pre>update = {html.escape(json.dumps(update_str, indent=2))}"
-                f"</pre>\n<pre>context.chat_data = {html.escape(str(context.chat_data))}</pre>\n"
-                f"<pre>context.user_data = {html.escape(str(context.user_data))}</pre>\n"
-                f"<pre>{html.escape(tb_string)}</pre>"
+                f"```json\n{update_str_safe}\n```\n" # JSON blok
+                f"```\ncontext.chat_data = {str(context.chat_data)}\n```\n" # Običan tekst blok
+                f"```\ncontext.user_data = {str(context.user_data)}\n```\n" # Običan tekst blok
+                f"```python\n{tb_string}\n```" # Python traceback blok
             )
+
             # Skratite poruku ako je predugačka za Telegram (max 4096 karaktera)
             if len(message) > 4096:
-                message = message[:4000] + "..."
+                # Pokušajte da skratite sa zadržavanjem strukture ako je moguće,
+                # npr. skratiti traceback
+                truncated_message = message[:4000] # Grubo skraćivanje
+                if not truncated_message.endswith("```"): # Proverite da li se prekinuo kod blok
+                    truncated_message += "..." # Dodajte elipsu
+                message = truncated_message
+
             await context.bot.send_message(
-                chat_id=DEVELOPER_CHAT_ID, text=message, parse_mode=ParseMode.HTML
+                chat_id=DEVELOPER_CHAT_ID, text=message, parse_mode=ParseMode.MARKDOWN_V2
             )
         except Exception as e:
-            logger.error(f"Failed to send error message to developer: {e}")
+            logger.error(f"Failed to send error message to developer (developer notification part): {e}")
 
 
 def main() -> None:
