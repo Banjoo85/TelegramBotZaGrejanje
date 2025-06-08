@@ -1,6 +1,6 @@
 import logging
 import json
-import os # Dodato za pristup environment varijablama
+import os
 import yagmail
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
@@ -12,10 +12,15 @@ from telegram.ext import (
     MessageHandler,
     filters
 )
-import datetime # POTREBNO ZA PRINT DATETIME
+import datetime
+from telegram.constants import ParseMode # Dodato za webhook mode
 
 # Inicijalni print da se potvrdi pokretanje fajla
 print(f"Bot se pokreće sa najnovijim kodom! Vreme pokretanja: {datetime.datetime.now()}")
+
+# Konfiguracija logginga (preporuka za produkciono okruženje)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 # --- Stanja za ConversationHandler (za prikupljanje skice) ---
 AWAITING_SKETCH = 1
@@ -31,11 +36,13 @@ ADMIN_BCC_EMAIL = os.environ.get('ADMIN_BCC_EMAIL', "banjooo85@gmail.com")
 
 # Provera da li su varijable učitane (dobra praksa)
 if not SENDER_EMAIL:
+    logger.error("EMAIL_SENDER_EMAIL environment variable not set.")
     raise ValueError("EMAIL_SENDER_EMAIL environment variable not set.")
 if not SENDER_PASSWORD:
+    logger.error("EMAIL_APP_PASSWORD environment variable not set.")
     raise ValueError("EMAIL_APP_PASSWORD environment variable not set.")
 if not ADMIN_BCC_EMAIL:
-    print("WARNING: ADMIN_BCC_EMAIL environment variable not set, using default 'banjooo85@gmail.com'.")
+    logger.warning("ADMIN_BCC_EMAIL environment variable not set, using default 'banjooo85@gmail.com'.")
 
 # Podaci za Izvođača Radova u Srbiji (za Grejne Instalacije)
 CONTRACTOR_SRB_HEATING = {
@@ -104,7 +111,7 @@ def load_messages(lang_code: str):
         with open(f'messages_{effective_lang_code}.json', 'r', encoding='utf-8') as f:
             return json.load(f)
     except FileNotFoundError:
-        print(f"GREŠKA: Message file for {effective_lang_code} not found. Defaulting to English.")
+        logger.error(f"Message file for {effective_lang_code} not found. Defaulting to English.")
         with open(f'messages_en.json', 'r', encoding='utf-8') as f:
             return json.load(f)
 
@@ -133,21 +140,20 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     user_id = query.from_user.id
     callback_data = query.data
-    print(f"DEBUG: Obradjuje se callback_data: {callback_data} za korisnika {user_id}")
-    print(f"DEBUG: user_data[{user_id}] na početku callback-a: {user_data.get(user_id)}")
+    logger.debug(f"Obradjuje se callback_data: {callback_data} za korisnika {user_id}")
+    logger.debug(f"user_data[{user_id}] na početku callback-a: {user_data.get(user_id)}")
 
     if callback_data.startswith('lang_'):
         lang_code = callback_data.split('_')[1]
         user_data[user_id]['lang'] = lang_code
         messages = load_messages(lang_code)
         await query.edit_message_text(text=messages["language_selected"])
-        print(f"DEBUG: Jezik postavljen na {lang_code}. user_data[{user_id}]: {user_data[user_id]}")
+        logger.debug(f"Jezik postavljen na {lang_code}. user_data[{user_id}]: {user_data[user_id]}")
         
         await choose_country(update, context, user_id)
 
     elif callback_data.startswith('country_'):
-        # ISPRAVLJENA LINIJA:
-        country_code = "_".join(callback_data.split('_')[1:]) # Ovo ce uzeti sve delove posle prvog '_'
+        country_code = "_".join(callback_data.split('_')[1:]) 
         user_data[user_id]['country'] = country_code
         
         messages = load_messages(user_data[user_id]['lang'])
@@ -155,14 +161,14 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         country_display_name = messages.get(country_name_key, country_code.capitalize())
         
         await query.edit_message_text(text=messages["country_selected"].format(country_name=country_display_name))
-        print(f"DEBUG: Zemlja postavljena na {country_code}. user_data[{user_id}]: {user_data[user_id]}")
+        logger.debug(f"Zemlja postavljena na {country_code}. user_data[{user_id}]: {user_data[user_id]}")
         
         await show_main_menu(update, context, user_id)
 
     elif callback_data.startswith('menu_'):
         menu_option = callback_data.split('_')[1]
         messages = load_messages(user_data[user_id]['lang'])
-        print(f"DEBUG: Izabrana opcija menija: {menu_option}. user_data[{user_id}]: {user_data[user_id]}")
+        logger.debug(f"Izabrana opcija menija: {menu_option}. user_data[{user_id}]: {user_data[user_id]}")
         
         if menu_option == 'quote':
             await query.edit_message_text(text=messages["request_quote_button"] + "...")
@@ -180,7 +186,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             contractor = CONTRACTOR_SRB_HEATING
             
             website_info = f"\nWeb: {contractor['website']}" if contractor['website'] else ""
-            telegram_info = f"\nTelegram: {contractor['telegram']}" if contractor.get('telegram') else ""
+            telegram_info = f"\nTelegram: {contractor.get('telegram')}" if contractor.get('telegram') else ""
 
             contact_info_text = messages["contractor_info"].format(
                 phone=contractor['phone'],
@@ -198,36 +204,35 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         messages = load_messages(user_data[user_id]['lang'])
         current_country = user_data[user_id].get('country') 
 
-        print(f"DEBUG: Tip instalacije odabran: {installation_type}. ")
-        print(f"DEBUG: current_country u user_data: {current_country}. ")
-        print(f"DEBUG: user_data[{user_id}]: {user_data[user_id]}")
+        logger.debug(f"Tip instalacije odabran: {installation_type}. ")
+        logger.debug(f"current_country u user_data: {current_country}. ")
+        logger.debug(f"user_data[{user_id}]: {user_data[user_id]}")
         
-        # Potvrda izbora, uvek se edituje poruka dugmeta
         await query.edit_message_text(text=messages["heat_pump_button"] + " je odabrana." if installation_type == 'heatpump' else messages["heating_installation_button"] + " je odabrana.")
 
         if installation_type == 'heating':
-            print(f"Korisnik {user_id}: Odabrana Grejna Instalacija. Dalje na meni za grejanje.")
+            logger.info(f"Korisnik {user_id}: Odabrana Grejna Instalacija. Dalje na meni za grejanje.")
             await choose_heating_system_menu(update, context, user_id)
         elif installation_type == 'heatpump':
-            print(f"Korisnik {user_id}: Odabrana Toplotna Pumpa. Zemlja: {current_country}")
+            logger.info(f"Korisnik {user_id}: Odabrana Toplotna Pumpa. Zemlja: {current_country}")
             
             hp_offers_crna_gora_entry = HEAT_PUMP_OFFERS.get('crna_gora', {})
             hp_options_crna_gora = hp_offers_crna_gora_entry.get('options', [])
-            print(f"Korisnik {user_id}: Proveravam uslove za Crnu Goru:")
-            print(f"    current_country == 'crna_gora': {current_country == 'crna_gora'} (current_country: '{current_country}')")
-            print(f"    len(hp_options_crna_gora) == 1: {len(hp_options_crna_gora) == 1} (options: {hp_options_crna_gora}, dužina: {len(hp_options_crna_gora)})")
+            logger.debug(f"Korisnik {user_id}: Proveravam uslove za Crnu Goru:")
+            logger.debug(f"    current_country == 'crna_gora': {current_country == 'crna_gora'} (current_country: '{current_country}')")
+            logger.debug(f"    len(hp_options_crna_gora) == 1: {len(hp_options_crna_gora) == 1} (options: {hp_options_crna_gora}, dužina: {len(hp_options_crna_gora)})")
             
             if hp_options_crna_gora:
-                print(f"    hp_options_crna_gora[0] == 'air_to_water': {hp_options_crna_gora[0] == 'air_to_water'}")
+                logger.debug(f"    hp_options_crna_gora[0] == 'air_to_water': {hp_options_crna_gora[0] == 'air_to_water'}")
             else:
-                print(f"    hp_options_crna_gora je prazna, ne može se proveriti hp_options_crna_gora[0]")
+                logger.debug(f"    hp_options_crna_gora je prazna, ne može se proveriti hp_options_crna_gora[0]")
 
             # --- LOGIKA ZA CRNU GORU (AUTOMATSKI PRIKAZ PODATAKA) ---
             if current_country == 'crna_gora' and \
                len(hp_options_crna_gora) == 1 and \
                hp_options_crna_gora[0] == 'air_to_water':
                 
-                print(f"Korisnik {user_id}: Svi uslovi za Crnu Goru su ispunjeni. Preskače se izbor tipa TP.")
+                logger.info(f"Korisnik {user_id}: Svi uslovi za Crnu Goru su ispunjeni. Preskače se izbor tipa TP.")
 
                 contractor = CONTRACTOR_MNE_HP
                 chosen_hp_name_dict = {}
@@ -242,7 +247,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 country_display_name = messages.get(f"{current_country}_name", current_country.capitalize())
                 website_info = f"\nWeb: {contractor['website']}" if contractor['website'] else ""
                 
-                print(f"Korisnik {user_id}: Priprema se poruka sa podacima Instal M.")
+                logger.debug(f"Korisnik {user_id}: Priprema se poruka sa podacima Instal M.")
                 try:
                     await query.message.reply_text( # Slanje nove poruke sa podacima
                         text=messages["hp_offer_info"].format(
@@ -253,19 +258,19 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                             website_info=website_info
                         )
                     )
-                    print(f"Korisnik {user_id}: Poruka sa podacima Instal M uspešno poslata.")
+                    logger.info(f"Korisnik {user_id}: Poruka sa podacima Instal M uspešno poslata.")
                 except Exception as e:
-                    print(f"Korisnik {user_id}: GREŠKA prilikom slanja podataka Instal M: {e}")
+                    logger.error(f"Korisnik {user_id}: GREŠKA prilikom slanja podataka Instal M: {e}")
                     await query.message.reply_text("Došlo je do greške prilikom prikazivanja podataka. Molimo pokušajte ponovo.")
 
-                print(f"Korisnik {user_id}: Vraćanje na glavni meni.")
+                logger.info(f"Korisnik {user_id}: Vraćanje na glavni meni.")
                 await show_main_menu(update, context, user_id)
                 return 
 
             # --- OSTATAK LOGIKE (za Srbiju ili više opcija toplotnih pumpi) ---
             else:
                 # Ako nije Crna Gora ili ima više opcija, prikaži izbor tipa TP
-                print(f"Korisnik {user_id}: Nije Crna Gora ili više opcija. Prikazuje se izbor tipa TP.")
+                logger.debug(f"Korisnik {user_id}: Nije Crna Gora ili više opcija. Prikazuje se izbor tipa TP.")
                 await show_heat_pump_options(update, context, user_id)
             return
 
@@ -273,7 +278,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         heating_system_type = callback_data.split('_')[1]
         user_data[user_id]['heating_system_type'] = heating_system_type
         messages = load_messages(user_data[user_id]['lang'])
-        print(f"DEBUG: Tip grejnog sistema odabran: {heating_system_type}. user_data[{user_id}]: {user_data[user_id]}")
+        logger.debug(f"Tip grejnog sistema odabran: {heating_system_type}. user_data[{user_id}]: {user_data[user_id]}")
 
         response_text = ""
         if heating_system_type == 'radiators':
@@ -304,7 +309,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await query.message.reply_text(contact_info_text)
             await show_main_menu(update, context, user_id)
             return
-        
+            
         elif heating_system_type == 'existing_heating':
             await query.edit_message_text(text=messages["existing_installation_button"] + " je izabrana.")
             await query.message.reply_text(messages["redirect_to_hp"])
@@ -325,7 +330,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         current_lang = user_data[user_id]['lang']
         current_country = user_data[user_id]['country']
         messages = load_messages(current_lang)
-        print(f"DEBUG: Tip toplotne pumpe odabran: {hp_type_chosen}. user_data[{user_id}]: {user_data[user_id]}")
+        logger.debug(f"Tip toplotne pumpe odabran: {hp_type_chosen}. user_data[{user_id}]: {user_data[user_id]}")
 
 
         country_data = HEAT_PUMP_OFFERS.get(current_country)
@@ -365,7 +370,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 async def choose_country(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int) -> None:
     messages = load_messages(user_data[user_id]['lang'])
-    print(f"DEBUG: Prikazivanje izbora zemlje za korisnika {user_id}. user_data[{user_id}]: {user_data[user_id]}")
+    logger.debug(f"Prikazivanje izbora zemlje za korisnika {user_id}. user_data[{user_id}]: {user_data[user_id]}")
 
     keyboard = [
         [InlineKeyboardButton(messages["srbija_button"], callback_data='country_srbija')],
@@ -377,7 +382,7 @@ async def choose_country(update: Update, context: ContextTypes.DEFAULT_TYPE, use
 # Funkcija za prikaz glavnog menija
 async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int) -> None:
     messages = load_messages(user_data[user_id]['lang'])
-    print(f"DEBUG: Prikazivanje glavnog menija za korisnika {user_id}. user_data[{user_id}]: {user_data[user_id]}")
+    logger.debug(f"Prikazivanje glavnog menija za korisnika {user_id}. user_data[{user_id}]: {user_data[user_id]}")
     
     keyboard = [
         [InlineKeyboardButton(messages["request_quote_button"], callback_data='menu_quote')],
@@ -391,7 +396,7 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, use
 # Funkcija za prikaz izbora tipa instalacije (grejanje ili toplotna pumpa)
 async def choose_installation_type_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int) -> None:
     messages = load_messages(user_data[user_id]['lang'])
-    print(f"DEBUG: Prikazivanje izbora tipa instalacije za korisnika {user_id}. user_data[{user_id}]: {user_data[user_id]}")
+    logger.debug(f"Prikazivanje izbora tipa instalacije za korisnika {user_id}. user_data[{user_id}]: {user_data[user_id]}")
     
     keyboard = [
         [InlineKeyboardButton(messages["heating_installation_button"], callback_data='type_heating')],
@@ -403,7 +408,7 @@ async def choose_installation_type_menu(update: Update, context: ContextTypes.DE
 # Funkcija za prikaz izbora tipa grejanja (radijatori, fan coil, podno, podno+fan coil, komplet sa HP)
 async def choose_heating_system_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int) -> None:
     messages = load_messages(user_data[user_id]['lang'])
-    print(f"DEBUG: Prikazivanje izbora grejnog sistema za korisnika {user_id}. user_data[{user_id}]: {user_data[user_id]}")
+    logger.debug(f"Prikazivanje izbora grejnog sistema za korisnika {user_id}. user_data[{user_id}]: {user_data[user_id]}")
 
     keyboard = [
         [InlineKeyboardButton(messages["radiators_button"], callback_data='system_radiators')],
@@ -422,7 +427,7 @@ async def show_heat_pump_options(update: Update, context: ContextTypes.DEFAULT_T
     current_lang = user_data[user_id]['lang']
     current_country = user_data[user_id]['country']
     messages = load_messages(current_lang)
-    print(f"DEBUG: Prikazivanje opcija TP za korisnika {user_id}. Country: {current_country}. user_data[{user_id}]: {user_data[user_id]}")
+    logger.debug(f"Prikazivanje opcija TP za korisnika {user_id}. Country: {current_country}. user_data[{user_id}]: {user_data[user_id]}")
     
     keyboard = []
     
@@ -470,17 +475,17 @@ async def send_email_with_sketch(recipient: str, subject: str, body: str, file_p
             attachments=file_path,
             bcc=ADMIN_BCC_EMAIL
         )
+        logger.info(f"Email uspešno poslat na {recipient} sa BCC na {ADMIN_BCC_EMAIL}.")
     except Exception as e:
-        print(f"GREŠKA prilikom slanja emaila: {e}")
-        # Možeš dodati logovanje greške umesto printa za produkciono okruženje
+        logger.error(f"GREŠKA prilikom slanja emaila: {e}")
     finally:
         # Obriši preuzeti fajl nakon slanja, bez obzira na uspeh slanja mejla
         if os.path.exists(file_path):
             try:
                 os.remove(file_path)
-                print(f"Obrisan fajl: {file_path}")
+                logger.info(f"Obrisan fajl: {file_path}")
             except OSError as e:
-                print(f"GREŠKA prilikom brisanja fajla {file_path}: {e}")
+                logger.error(f"GREŠKA prilikom brisanja fajla {file_path}: {e}")
 
 # --- Handleri za ConversationHandler (prikupljanje skice) ---
 
@@ -488,7 +493,7 @@ async def request_sketch_entry(update: Update, context: ContextTypes.DEFAULT_TYP
     """Ulazi u stanje čekanja na skicu."""
     user_id = update.effective_user.id
     messages = load_messages(user_data[user_id]['lang'])
-    print(f"DEBUG: Pokrenut request_sketch_entry za korisnika {user_id}. user_data[{user_id}]: {user_data[user_id]}")
+    logger.debug(f"Pokrenut request_sketch_entry za korisnika {user_id}. user_data[{user_id}]: {user_data[user_id]}")
 
     if update.callback_query and update.callback_query.data == 'send_sketch_now':
         await update.callback_query.edit_message_text(text=messages["request_sketch"])
@@ -501,7 +506,7 @@ async def handle_sketch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     """Prima skicu (fotografiju ili dokument) i šalje email."""
     user_id = update.effective_user.id
     messages = load_messages(user_data[user_id]['lang'])
-    print(f"DEBUG: Primljen fajl u handle_sketch za korisnika {user_id}. user_data[{user_id}]: {user_data[user_id]}")
+    logger.debug(f"Primljen fajl u handle_sketch za korisnika {user_id}. user_data[{user_id}]: {user_data[user_id]}")
     
     file_id = None
     file_name = None
@@ -520,17 +525,12 @@ async def handle_sketch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         return AWAITING_SKETCH # Ostani u istom stanju
 
     file_telegram = await context.bot.get_file(file_id)
-    # Koristi /tmp direktorijum na serveru, jer je to obično writable lokacija
-    # Na Windows-u će i dalje raditi 'downloads' ali na Renderu ti treba nešto drugo
-    # Ako ti ne treba lokalno čuvanje za debug, možeš samo koristiti file_telegram.download_as_bytearray()
-    # i poslati to direktno yagmailu ako on podržava bajtove.
-    # Trenutno ostavljam download_to_drive za konzistenciju sa lokalnim okruženjem.
     download_path = os.path.join("/tmp", file_name) # Izmena za Render/Linux okruženja
 
     os.makedirs("/tmp", exist_ok=True) # Kreiraj /tmp ako ne postoji
 
     await file_telegram.download_to_drive(download_path)
-    print(f"Fajl preuzet: {download_path}")
+    logger.info(f"Fajl preuzet: {download_path}")
     
     subject = f"Novi zahtev za ponudu - Grejna instalacija (Skica) od korisnika {user_id}"
     
@@ -568,7 +568,7 @@ async def handle_sketch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     contractor = CONTRACTOR_SRB_HEATING
     
     website_info = f"\nWeb: {contractor['website']}" if contractor['website'] else ""
-    telegram_info = f"\nTelegram: {contractor['telegram']}" if contractor.get('telegram') else ""
+    telegram_info = f"\nTelegram: {contractor.get('telegram')}" if contractor.get('telegram') else ""
 
     contact_info_text = messages["contractor_info"].format(
         phone=contractor['phone'],
@@ -581,16 +581,13 @@ async def handle_sketch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     
     await show_main_menu(update, context, user_id)
     
-    # Brisanje fajla je sada premesteno u send_email_with_sketch finally blok
-    # kako bi se osiguralo brisanje čak i ako slanje mejla ne uspe, ali je fajl preuzet
-
     return ConversationHandler.END
 
 async def cancel_sketch_request(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Otkazuje zahtev za skicu."""
     user_id = update.effective_user.id
     messages = load_messages(user_data[user_id]['lang'])
-    print(f"DEBUG: Otkazivanje skice za korisnika {user_id}. user_data[{user_id}]: {user_data[user_id]}")
+    logger.debug(f"Otkazivanje skice za korisnika {user_id}. user_data[{user_id}]: {user_data[user_id]}")
     await update.message.reply_text("Slanje skice je otkazano.")
     await show_main_menu(update, context, user_id)
     return ConversationHandler.END
@@ -600,11 +597,16 @@ async def cancel_sketch_request(update: Update, context: ContextTypes.DEFAULT_TY
 
 def main() -> None:
     """Pokreni bota."""
-    # Bot token se preuzima iz environment varijable
     TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
     if not TOKEN:
+        logger.critical("TELEGRAM_BOT_TOKEN environment variable not set. Bot cannot start.")
         raise ValueError("TELEGRAM_BOT_TOKEN environment variable not set.")
     
+    # --- IZMENE OVDE: Za Webhook deployment na Renderu ---
+    PORT = int(os.environ.get('PORT', 8080)) # Render će automatski postaviti ovu varijablu
+    WEBHOOK_URL = os.environ.get('WEBHOOK_URL') # Ovo moraš ručno postaviti na Renderu
+    # --- KRAJ IZMENA ---
+
     application = Application.builder().token(TOKEN).build() 
 
     application.add_handler(CommandHandler("start", start))
@@ -622,7 +624,19 @@ def main() -> None:
     )
     application.add_handler(sketch_conversation_handler) 
 
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+    # --- IZMENE OVDE: Uslovno pokretanje Webhook ili Polling moda ---
+    if WEBHOOK_URL:
+        logger.info(f"Pokrećem bot u webhook modu. URL: {WEBHOOK_URL}, Port: {PORT}")
+        application.run_webhook(
+            listen="0.0.0.0",  # Slušaj na svim interfejsima
+            port=PORT,         # Koristi port koji Render dodeli
+            url_path=TOKEN,    # Putanja u URL-u za sigurnost
+            webhook_url=f"{WEBHOOK_URL}/{TOKEN}" # Kompletan URL za Telegram API
+        )
+    else:
+        logger.info("WEBHOOK_URL nije postavljen. Pokrećem bot u polling modu (za lokalni razvoj).")
+        application.run_polling(allowed_updates=Update.ALL_TYPES)
+    # --- KRAJ IZMENA ---
 
 if __name__ == "__main__":
     main()
