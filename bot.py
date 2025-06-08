@@ -2,6 +2,9 @@ import logging
 import json
 import os
 import yagmail
+import datetime
+import html # Dodato za error_handler
+import traceback # Dodato za error_handler
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
     Application,
@@ -12,11 +15,10 @@ from telegram.ext import (
     MessageHandler,
     filters
 )
-import datetime
 from telegram.constants import ParseMode
 from dotenv import load_dotenv
 
-# Učitavanje environment varijabli sa početka skripte
+# Učitavanje environment varijabli
 load_dotenv()
 
 # Inicijalni print da se potvrdi pokretanje fajla
@@ -33,6 +35,9 @@ AWAITING_SKETCH = 1
 SENDER_EMAIL = os.environ.get('EMAIL_SENDER_EMAIL')
 SENDER_PASSWORD = os.environ.get('EMAIL_APP_PASSWORD')
 ADMIN_BCC_EMAIL = os.environ.get('ADMIN_BCC_EMAIL', "banjooo85@gmail.com")
+# VAŠ TELEGRAM ID za obaveštenja o greškama (promenite ovo!)
+DEVELOPER_CHAT_ID = os.environ.get('TELEGRAM_DEVELOPER_CHAT_ID') # Postavite ovo u .env ili Renderu
+
 
 if not SENDER_EMAIL:
     logger.critical("EMAIL_SENDER_EMAIL environment variable not set. Bot cannot send emails.")
@@ -40,6 +45,15 @@ if not SENDER_PASSWORD:
     logger.critical("EMAIL_APP_PASSWORD environment variable not set. Bot cannot send emails.")
 if not ADMIN_BCC_EMAIL:
     logger.warning("ADMIN_BCC_EMAIL environment variable not set, using default 'banjooo85@gmail.com'.")
+if not DEVELOPER_CHAT_ID:
+    logger.warning("TELEGRAM_DEVELOPER_CHAT_ID environment variable not set. Error notifications to developer will be skipped.")
+else:
+    try:
+        DEVELOPER_CHAT_ID = int(DEVELOPER_CHAT_ID) # Osigurajte da je int
+    except ValueError:
+        logger.critical("TELEGRAM_DEVELOPER_CHAT_ID is not a valid integer. Error notifications to developer will be skipped.")
+        DEVELOPER_CHAT_ID = None
+
 
 CONTRACTOR_SRB_HEATING = {
     "name": "Igor Bošković",
@@ -220,7 +234,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         user_data[user_id] = {'lang': 'en'} # Podrazumevani jezik ako korisnik nije prošao kroz /start
         logger.warning(f"user_data[{user_id}] nije pronađen. Inicijalizovan sa podrazumevanim jezikom 'en'.")
         # Nakon inicijalizacije, preusmerite korisnika na start meni, jer mu nedostaje kontekst
-        messages = load_messages(user_data[user_id]['lang'])
+        messages = load_messages(user_data[user_id]['lang']) # Učitajte poruke sa default jezikom
         await query.edit_message_text(text=messages["session_expired_restart_needed"], parse_mode=ParseMode.MARKDOWN_V2) # Obavestite korisnika
         await start(update, context) # Pozovite start handler da mu prikažete početni meni
         return ConversationHandler.END # Završite ConversationHandler ako je u njemu, jer je sesija resetovana
@@ -270,12 +284,12 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await query.edit_message_text(text=messages["contact_button"] + "...")
             contractor = CONTRACTOR_SRB_HEATING # Za opštu "Kontakt" opciju, koristimo glavnog izvođača za Srbiju
             
-            website_info = f"\nWeb: {contractor['website']}" if contractor['website'] else ""
-            telegram_info = f"\nTelegram: {contractor.get('telegram')}" if contractor.get('telegram') else ""
+            website_info = f"\nWeb: `{contractor['website']}`" if contractor['website'] else ""
+            telegram_info = f"\nTelegram: `{contractor.get('telegram')}`" if contractor.get('telegram') else ""
 
             contact_info_text = messages["contractor_info"].format(
                 phone=contractor['phone'],
-                email=contractor['email'],
+                email=f"`{contractor['email']}`", # Dodato ` `
                 website_info=website_info,
                 telegram_info=telegram_info
             )
@@ -335,9 +349,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
                 chosen_hp_name = chosen_hp_name_dict.get('air_to_water', 'Vazduh-Voda Toplotna Pumpa')
                 country_display_name = messages.get(f"{current_country}_name", current_country.capitalize())
-                website_info = f"\nWeb: {contractor['website']}" if contractor['website'] else ""
+                website_info = f"\nWeb: `{contractor['website']}`" if contractor['website'] else "" # Dodato ` `
                 
-                telegram_info = f"\nTelegram: {contractor.get('telegram')}" if contractor.get('telegram') else ""
+                telegram_info = f"\nTelegram: `{contractor.get('telegram')}`" if contractor.get('telegram') else "" # Dodato ` `
 
                 telegram_username = update.effective_user.username if update.effective_user.username else 'N/A'
 
@@ -362,7 +376,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                             hp_type=chosen_hp_name, 
                             country_name=country_display_name,
                             phone=contractor['phone'],
-                            email=contractor['email'],
+                            email=f"`{contractor['email']}`", # Dodato ` `
                             website_info=website_info,
                             telegram_info=telegram_info
                         ),
@@ -421,12 +435,12 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 telegram_username=telegram_username
             )
 
-            website_info = f"\nWeb: {contractor['website']}" if contractor['website'] else ""
-            telegram_info = f"\nTelegram: {contractor.get('telegram')}" if contractor.get('telegram') else ""
+            website_info = f"\nWeb: `{contractor['website']}`" if contractor['website'] else "" # Dodato ` `
+            telegram_info = f"\nTelegram: `{contractor.get('telegram')}`" if contractor.get('telegram') else "" # Dodato ` `
             
             contact_info_text = messages["contractor_info"].format(
                 phone=contractor['phone'],
-                email=contractor['email'],
+                email=f"`{contractor['email']}`", # Dodato ` `
                 website_info=website_info,
                 telegram_info=telegram_info
             )
@@ -448,6 +462,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
         await query.edit_message_text(text=f"{response_text} je izabrana.")
 
+        # PROVERA DA LI SE OVDE UVEK PRIKAZUJU PODACI ZA GREJNE INSTALACIJE
         if user_data[user_id].get('installation_type') == 'heating': 
             contractor = CONTRACTOR_SRB_HEATING
             contractor_email_target = contractor["email"]
@@ -468,15 +483,15 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 telegram_username=telegram_username
             )
 
-            website_info = f"\nWeb: {contractor['website']}" if contractor['website'] else ""
-            telegram_info = f"\nTelegram: {contractor.get('telegram')}" if contractor.get('telegram') else ""
+            website_info = f"\nWeb: `{contractor['website']}`" if contractor['website'] else "" # Dodato ` `
+            telegram_info = f"\nTelegram: `{contractor.get('telegram')}`" if contractor.get('telegram') else "" # Dodato ` `
 
             logger.debug(f"Preparing contractor_info_text with: phone={contractor['phone']}, email={contractor['email']}, website_info='{website_info}', telegram_info='{telegram_info}'")
             logger.debug(f"Raw message template (contractor_info): {messages['contractor_info']}")
 
             contact_info_text = messages["contractor_info"].format(
                 phone=contractor['phone'],
-                email=contractor['email'],
+                email=f"`{contractor['email']}`", # Dodato ` `
                 website_info=website_info,
                 telegram_info=telegram_info
             )
@@ -504,7 +519,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if user_id not in user_data:
             user_data[user_id] = {'lang': 'en'} # Fallback
             logger.warning(f"user_data[{user_id}] nije pronađen u 'no_sketch_needed'. Inicijalizovan.")
-            await query.edit_message_text(text="Sesija istekla. Molimo pokrenite /start.", parse_mode=ParseMode.MARKDOWN_V2)
+            messages = load_messages(user_data[user_id]['lang']) # Učitajte poruke
+            await query.edit_message_text(text=messages["session_expired_restart_needed"], parse_mode=ParseMode.MARKDOWN_V2)
             await start(update, context)
             return ConversationHandler.END
 
@@ -521,7 +537,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if user_id not in user_data or 'lang' not in user_data[user_id] or 'country' not in user_data[user_id]:
             user_data[user_id] = {'lang': 'en'} # Fallback
             logger.warning(f"user_data[{user_id}] nije potpuno inicijalizovan u 'hp_type_'. Inicijalizovan.")
-            await query.edit_message_text(text="Sesija istekla. Molimo pokrenite /start.", parse_mode=ParseMode.MARKDOWN_V2)
+            messages = load_messages(user_data[user_id]['lang']) # Učitajte poruke
+            await query.edit_message_text(text=messages["session_expired_restart_needed"], parse_mode=ParseMode.MARKDOWN_V2)
             await start(update, context)
             return ConversationHandler.END
 
@@ -550,7 +567,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         country_name_key = f"{current_country}_name"
         country_display_name = messages.get(country_name_key, current_country.capitalize())
 
-        website_info = f"\nWeb: {contractor['website']}" if contractor['website'] else ""
+        website_info = f"\nWeb: `{contractor['website']}`" if contractor['website'] else "" # Dodato ` `
         telegram_username = update.effective_user.username if update.effective_user.username else 'N/A'
 
         subject = f"Novi zahtev za ponudu: Toplotna Pumpa ({chosen_hp_name}) od korisnika {user_id}"
@@ -567,7 +584,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             telegram_username=telegram_username
         )
         
-        telegram_info = f"\nTelegram: {contractor.get('telegram')}" if contractor.get('telegram') else ""
+        telegram_info = f"\nTelegram: `{contractor.get('telegram')}`" if contractor.get('telegram') else "" # Dodato ` `
 
         logger.debug(f"Preparing hp_offer_info text for HP type: {chosen_hp_name}, country: {country_display_name}")
         logger.debug(f"Contractor details: phone={contractor['phone']}, email={contractor['email']}, website_info='{website_info}', telegram_info='{telegram_info}'")
@@ -579,7 +596,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                     hp_type=chosen_hp_name,
                     country_name=country_display_name,
                     phone=contractor['phone'],
-                    email=contractor['email'],
+                    email=f"`{contractor['email']}`", # Dodato ` `
                     website_info=website_info,
                     telegram_info=telegram_info
                 ),
@@ -794,12 +811,12 @@ async def handle_sketch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     
     contractor = CONTRACTOR_SRB_HEATING
     
-    website_info = f"\nWeb: {contractor['website']}" if contractor['website'] else ""
-    telegram_info = f"\nTelegram: {contractor.get('telegram')}" if contractor.get('telegram') else ""
+    website_info = f"\nWeb: `{contractor['website']}`" if contractor['website'] else "" # Dodato ` `
+    telegram_info = f"\nTelegram: `{contractor.get('telegram')}`" if contractor.get('telegram') else "" # Dodato ` `
 
     contact_info_text = messages["contractor_info"].format(
         phone=contractor['phone'],
-        email=contractor['email'],
+        email=f"`{contractor['email']}`", # Dodato ` `
         website_info=website_info,
         telegram_info=telegram_info
     )
@@ -820,7 +837,7 @@ async def cancel_sketch_request(update: Update, context: ContextTypes.DEFAULT_TY
     if user_id not in user_data:
         user_data[user_id] = {'lang': 'en'} # Fallback
         logger.warning(f"user_data[{user_id}] nije pronađen u 'cancel_sketch_request'. Inicijalizovan.")
-        messages = load_messages(user_data[user_id]['lang'])
+        messages = load_messages(user_data[user_id]['lang']) # Učitajte poruke
         await update.message.reply_text(text=messages["session_expired_restart_needed"], parse_mode=ParseMode.MARKDOWN_V2)
         return ConversationHandler.END
 
@@ -829,6 +846,48 @@ async def cancel_sketch_request(update: Update, context: ContextTypes.DEFAULT_TY
     await update.message.reply_text(messages["no_sketch_confirmation"], parse_mode=ParseMode.MARKDOWN_V2)
     await show_main_menu(update, context, user_id)
     return ConversationHandler.END
+
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Log the error and send a telegram message to notify the developer."""
+    logger.error("Exception while handling an update:", exc_info=context.error)
+
+    # Obavestite korisnika ako je moguće
+    if update and update.effective_chat:
+        try:
+            # Učitajte poruke na osnovu jezika korisnika ako je dostupan, inače engleski
+            user_id = update.effective_user.id if update.effective_user else None
+            lang = user_data.get(user_id, {}).get('lang', 'en') if user_id else 'en'
+            messages = load_messages(lang)
+            
+            await update.effective_chat.send_message(
+                messages.get("error_occurred", "An unexpected error occurred. Please try again or type /start."),
+                parse_mode=ParseMode.MARKDOWN_V2
+            )
+        except Exception as e:
+            logger.error(f"Failed to send error message to user: {e}")
+
+    # Opcionalno: Pošaljite grešku sebi (administratoru)
+    if DEVELOPER_CHAT_ID:
+        try:
+            tb_list = traceback.format_exception(None, context.error, context.error.__traceback__)
+            tb_string = "".join(tb_list)
+            update_str = update.to_dict() if isinstance(update, Update) else str(update)
+            message = (
+                f"An exception was raised while handling an update\n"
+                f"<pre>update = {html.escape(json.dumps(update_str, indent=2))}"
+                f"</pre>\n<pre>context.chat_data = {html.escape(str(context.chat_data))}</pre>\n"
+                f"<pre>context.user_data = {html.escape(str(context.user_data))}</pre>\n"
+                f"<pre>{html.escape(tb_string)}</pre>"
+            )
+            # Skratite poruku ako je predugačka za Telegram (max 4096 karaktera)
+            if len(message) > 4096:
+                message = message[:4000] + "..."
+            await context.bot.send_message(
+                chat_id=DEVELOPER_CHAT_ID, text=message, parse_mode=ParseMode.HTML
+            )
+        except Exception as e:
+            logger.error(f"Failed to send error message to developer: {e}")
+
 
 def main() -> None:
     TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
@@ -840,6 +899,10 @@ def main() -> None:
     WEBHOOK_URL = os.environ.get('WEBHOOK_URL') 
 
     application = Application.builder().token(TOKEN).build() 
+
+    # --- Registracija error handlera ---
+    application.add_error_handler(error_handler) 
+    # -----------------------------------
 
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CallbackQueryHandler(button_callback)) 

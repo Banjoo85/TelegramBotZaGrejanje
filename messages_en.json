@@ -26,11 +26,12 @@
     "request_sketch": "Please send a sketch of the building (floor plan/layout) with dimensions, or write a brief description of the space you need a quote for.",
     "sketch_received": "Thank you! Your sketch has been received and forwarded to the contractor. They will contact you soon.",
     "choose_heat_pump_type": "Please choose the type of heat pump:",
-    "contractor_info": "Contact for heating installations:\n**Phone:** {phone}\n**Email:** {email}{website_info}{telegram_info}\n\nThey will contact you shortly for details and a quote.",
-    "hp_offer_info": "Here is the contact for **{hp_type}** heat pumps in **{country_name}**:\n**Phone:** {phone}\n**Email:** {email}{website_info}{telegram_info}\n\nThey will contact you shortly for details and a quote.",
+    "contractor_info": "Contact for heating installations:\n**Phone:** `{phone}`\n**Email:** `{email}`{website_info}{telegram_info}\n\nThey will contact you shortly for details and a quote.",
+    "hp_offer_info": "Here is the contact for **{hp_type}** heat pumps in **{country_name}**:\n**Phone:** `{phone}`\n**Email:** `{email}`{website_info}{telegram_info}\n\nThey will contact you shortly for details and a quote.",
     "send_sketch_button": "Send Sketch",
     "no_sketch_button": "I don't want to send a sketch",       
     "request_sketch_optional": "Would you like to send a sketch of the building with dimensions (floor plan/layout) for a more precise quote? This is optional.",
     "no_sketch_confirmation": "Understood, no sketch sent. Returning to the main menu.",
-    "session_expired_restart_needed": "Your session has expired or the bot has been restarted. Please type /start to begin again."
+    "session_expired_restart_needed": "Your session has expired or the bot has been restarted. Please type /start to begin again.",
+    "error_occurred": "An unexpected error occurred. Please try again or type /start."
 }
