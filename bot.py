@@ -3,8 +3,9 @@ import json
 import os
 import yagmail
 import datetime
-import html # Dodato za error_handler
-import traceback # Dodato za error_handler
+import html
+import traceback
+import smtplib # <--- DODATO: Za hvatanje SMTP grešaka
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
     Application,
@@ -134,7 +135,8 @@ async def send_email_with_sketch(recipient: str, subject: str, body: str, file_p
             return
 
         logger.debug(f"Pokušavam da se povežem na SMTP server sa: {SENDER_EMAIL}")
-        yag = yagmail.SMTP(user=SENDER_EMAIL, password=SENDER_PASSWORD, host='smtp.gmail.com', port=587, tls=True)
+        # IZMENA 1: Uklonjen 'tls=True'
+        yag = yagmail.SMTP(user=SENDER_EMAIL, password=SENDER_PASSWORD, host='smtp.gmail.com', port=587)
         logger.info("Uspesno kreiran yagmail SMTP objekat za slanje sa skicom.")
         
         full_body = (
@@ -158,7 +160,8 @@ async def send_email_with_sketch(recipient: str, subject: str, body: str, file_p
             bcc=ADMIN_BCC_EMAIL
         )
         logger.info(f"Email sa skicom uspešno poslat na {recipient} sa BCC na {ADMIN_BCC_EMAIL}.")
-    except yagmail.SMTPAuthenticationError as e:
+    # IZMENA 2: Promenjen izuzetak
+    except smtplib.SMTPAuthenticationError as e:
         logger.critical(f"GREŠKA U AUTENTIFIKACIJI YAGMAIL-a (sa skicom): {e}")
         logger.critical("Proverite da li su EMAIL_SENDER_EMAIL i EMAIL_APP_PASSWORD ispravni (koristite 16-cifrenu app lozinku).")
     except Exception as e:
@@ -179,7 +182,8 @@ async def send_email_without_attachment(recipient: str, subject: str, body: str,
             return
 
         logger.debug(f"Pokušavam da se povežem na SMTP server (bez priloga) sa: {SENDER_EMAIL}")
-        yag = yagmail.SMTP(user=SENDER_EMAIL, password=SENDER_PASSWORD, host='smtp.gmail.com', port=587, tls=True)
+        # IZMENA 3: Uklonjen 'tls=True'
+        yag = yagmail.SMTP(user=SENDER_EMAIL, password=SENDER_PASSWORD, host='smtp.gmail.com', port=587)
         logger.info("Uspesno kreiran yagmail SMTP objekat za slanje bez priloga.")
 
         full_body = (
@@ -197,7 +201,8 @@ async def send_email_without_attachment(recipient: str, subject: str, body: str,
             bcc=ADMIN_BCC_EMAIL
         )
         logger.info(f"Email (bez priloga) uspešno poslat na {recipient} sa BCC na {ADMIN_BCC_EMAIL}.")
-    except yagmail.SMTPAuthenticationError as e:
+    # IZMENA 4: Promenjen izuzetak
+    except smtplib.SMTPAuthenticationError as e:
         logger.critical(f"GREŠKA U AUTENTIFIKACIJI YAGMAIL-a (bez priloga): {e}")
         logger.critical("Proverite da li su EMAIL_SENDER_EMAIL i EMAIL_APP_PASSWORD ispravni (koristite 16-cifrenu app lozinku).")
     except Exception as e:
