@@ -275,7 +275,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         logger.debug(f"Izabrana opcija menija: {menu_option}. user_data[{user_id}]: {user_data[user_id]}")
         
         if menu_option == 'quote':
-            await query.edit_message_text(text=messages["request_quote_button"] + "...")
+            # === IZMENA OVDE: Koristi novi ključ za prelaznu poruku ===
+            await query.edit_message_text(text=messages["quote_request_acknowledgement"], parse_mode=ParseMode.MARKDOWN_V2)
             await choose_installation_type_menu(update, context, user_id)
         elif menu_option == 'services':
             await query.edit_message_text(text=messages["services_info_button"] + "...")
@@ -354,9 +355,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
                 chosen_hp_name = chosen_hp_name_dict.get('air_to_water', 'Vazduh-Voda Toplotna Pumpa')
                 country_display_name = messages.get(f"{current_country}_name", current_country.capitalize())
-                website_info = f"\nWeb: `{contractor['website']}`" if contractor['website'] else "" # Dodato ` `
+                website_info = f"\nWeb: `{contractor['website']}`" if contractor['website'] else ""
                 
-                telegram_info = f"\nTelegram: `{contractor.get('telegram')}`" if contractor.get('telegram') else "" # Dodato ` `
+                telegram_info = f"\nTelegram: `{contractor.get('telegram')}`" if contractor.get('telegram') else ""
 
                 telegram_username = update.effective_user.username if update.effective_user.username else 'N/A'
 
@@ -381,7 +382,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                             hp_type=chosen_hp_name, 
                             country_name=country_display_name,
                             phone=contractor['phone'],
-                            email=f"`{contractor['email']}`", # Dodato ` `
+                            email=f"`{contractor['email']}`",
                             website_info=website_info,
                             telegram_info=telegram_info
                         ),
@@ -440,12 +441,12 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 telegram_username=telegram_username
             )
 
-            website_info = f"\nWeb: `{contractor['website']}`" if contractor['website'] else "" # Dodato ` `
-            telegram_info = f"\nTelegram: `{contractor.get('telegram')}`" if contractor.get('telegram') else "" # Dodato ` `
+            website_info = f"\nWeb: `{contractor['website']}`" if contractor['website'] else ""
+            telegram_info = f"\nTelegram: `{contractor.get('telegram')}`" if contractor.get('telegram') else ""
             
             contact_info_text = messages["contractor_info"].format(
                 phone=contractor['phone'],
-                email=f"`{contractor['email']}`", # Dodato ` `
+                email=f"`{contractor['email']}`",
                 website_info=website_info,
                 telegram_info=telegram_info
             )
@@ -488,15 +489,15 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 telegram_username=telegram_username
             )
 
-            website_info = f"\nWeb: `{contractor['website']}`" if contractor['website'] else "" # Dodato ` `
-            telegram_info = f"\nTelegram: `{contractor.get('telegram')}`" if contractor.get('telegram') else "" # Dodato ` `
+            website_info = f"\nWeb: `{contractor['website']}`" if contractor['website'] else ""
+            telegram_info = f"\nTelegram: `{contractor.get('telegram')}`" if contractor.get('telegram') else ""
 
             logger.debug(f"Preparing contractor_info_text with: phone={contractor['phone']}, email={contractor['email']}, website_info='{website_info}', telegram_info='{telegram_info}'")
             logger.debug(f"Raw message template (contractor_info): {messages['contractor_info']}")
 
             contact_info_text = messages["contractor_info"].format(
                 phone=contractor['phone'],
-                email=f"`{contractor['email']}`", # Dodato ` `
+                email=f"`{contractor['email']}`",
                 website_info=website_info,
                 telegram_info=telegram_info
             )
@@ -504,7 +505,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
             try:
                 await query.message.reply_text(contact_info_text, parse_mode=ParseMode.MARKDOWN_V2)
-                logger.debug(f"Prikazan kontakt info za grejne instalacije: {contact_info_text}")
+                logger.debug(f"Prikazan kontakt info za grejne instalacije.")
             except Exception as e:
                 logger.error(f"GREŠKA prilikom slanja kontakt info teksta za grejne instalacije: {e}", exc_info=True)
                 await query.message.reply_text("Došlo je do greške prilikom prikazivanja kontakt podataka za grejne instalacije. Molimo pokušajte ponovo.", parse_mode=ParseMode.MARKDOWN_V2)
@@ -572,7 +573,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         country_name_key = f"{current_country}_name"
         country_display_name = messages.get(country_name_key, current_country.capitalize())
 
-        website_info = f"\nWeb: `{contractor['website']}`" if contractor['website'] else "" # Dodato ` `
+        website_info = f"\nWeb: `{contractor['website']}`" if contractor['website'] else ""
         telegram_username = update.effective_user.username if update.effective_user.username else 'N/A'
 
         subject = f"Novi zahtev za ponudu: Toplotna Pumpa ({chosen_hp_name}) od korisnika {user_id}"
@@ -589,7 +590,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             telegram_username=telegram_username
         )
         
-        telegram_info = f"\nTelegram: `{contractor.get('telegram')}`" if contractor.get('telegram') else "" # Dodato ` `
+        telegram_info = f"\nTelegram: `{contractor.get('telegram')}`" if contractor.get('telegram') else ""
 
         logger.debug(f"Preparing hp_offer_info text for HP type: {chosen_hp_name}, country: {country_display_name}")
         logger.debug(f"Contractor details: phone={contractor['phone']}, email={contractor['email']}, website_info='{website_info}', telegram_info='{telegram_info}'")
@@ -601,7 +602,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                     hp_type=chosen_hp_name,
                     country_name=country_display_name,
                     phone=contractor['phone'],
-                    email=f"`{contractor['email']}`", # Dodato ` `
+                    email=f"`{contractor['email']}`",
                     website_info=website_info,
                     telegram_info=telegram_info
                 ),
@@ -816,12 +817,12 @@ async def handle_sketch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     
     contractor = CONTRACTOR_SRB_HEATING
     
-    website_info = f"\nWeb: `{contractor['website']}`" if contractor['website'] else "" # Dodato ` `
-    telegram_info = f"\nTelegram: `{contractor.get('telegram')}`" if contractor.get('telegram') else "" # Dodato ` `
+    website_info = f"\nWeb: `{contractor['website']}`" if contractor['website'] else ""
+    telegram_info = f"\nTelegram: `{contractor.get('telegram')}`" if contractor.get('telegram') else ""
 
     contact_info_text = messages["contractor_info"].format(
         phone=contractor['phone'],
-        email=f"`{contractor['email']}`", # Dodato ` `
+        email=f"`{contractor['email']}`",
         website_info=website_info,
         telegram_info=telegram_info
     )
@@ -856,7 +857,7 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
     """Log the error and send a telegram message to notify the developer."""
     logger.error("Exception while handling an update:", exc_info=context.error)
 
-    # Obavestite korisnika ako je moguće (ovde ne treba parse_mode)
+    # Obavestite korisnika ako je moguće
     if update and update.effective_chat:
         try:
             user_id = update.effective_user.id if update.effective_user else None
@@ -864,8 +865,7 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
             messages = load_messages(lang)
             
             await update.effective_chat.send_message(
-                messages.get("error_occurred", "An unexpected error occurred. Please try again or type /start.")
-                # Nema parse_mode ovde, jer ova poruka ne zahteva Markdown formatiranje
+                messages.get("error_occurred", "Došlo je do neočekivane greške. Molimo pokušajte ponovo ili kucajte /start.")
             )
         except Exception as e:
             logger.error(f"Failed to send error message to user (user notification part): {e}")
@@ -880,30 +880,45 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
             update_str_safe = ""
             if isinstance(update, Update):
                 try:
-                    update_str_safe = json.dumps(update.to_dict(), indent=2, ensure_ascii=False) # ensure_ascii=False za bolje prikazivanje
+                    update_str_safe = json.dumps(update.to_dict(), indent=2, ensure_ascii=False)
                 except Exception:
                     update_str_safe = str(update)
             else:
                 update_str_safe = str(update)
 
-            # Koristite MARKDOWN_V2 sa triple backticks za sigurnost
-            # Svi specijalni karakteri unutar ``` blokova su automatski escapovani
+            # Funkcija za sigurno escapovanje teksta za MarkdownV2 (osim za kod blokove)
+            def escape_markdown_v2(text: str) -> str:
+                escape_chars = r'_*[]()~`>#+-=|{}.!'
+                return "".join(f"\\{char}" if char in escape_chars else char for char in text)
+
+            # Prvo, pripremite pojedinačne delove poruke kao običan tekst
+            header_text = "An exception was raised while handling an update"
+            chat_data_text = f"context.chat_data = {str(context.chat_data)}"
+            user_data_text = f"context.user_data = {str(context.user_data)}"
+
+            # Skraćivanje JSON update objekta ako je predugačak
+            MAX_JSON_LEN = 1500 # Ograničite veličinu JSON-a
+            if len(update_str_safe) > MAX_JSON_LEN:
+                update_str_safe = update_str_safe[:MAX_JSON_LEN] + "\n... (truncated JSON)"
+            
+            # Skraćivanje tracebacka ako je predugačak
+            MAX_TB_LEN = 1500 # Ograničite veličinu tracebacka
+            if len(tb_string) > MAX_TB_LEN:
+                tb_string = tb_string[:MAX_TB_LEN] + "\n... (truncated traceback)"
+
+            # Formirajte poruku sa MarkdownV2 kod blokovima
             message = (
-                f"An exception was raised while handling an update\n"
+                f"{escape_markdown_v2(header_text)}\n"
                 f"```json\n{update_str_safe}\n```\n" # JSON blok
-                f"```\ncontext.chat_data = {str(context.chat_data)}\n```\n" # Običan tekst blok
-                f"```\ncontext.user_data = {str(context.user_data)}\n```\n" # Običan tekst blok
+                f"```\n{chat_data_text}\n```\n" # Običan tekst blok
+                f"```\n{user_data_text}\n```\n" # Običan tekst blok
                 f"```python\n{tb_string}\n```" # Python traceback blok
             )
 
-            # Skratite poruku ako je predugačka za Telegram (max 4096 karaktera)
-            if len(message) > 4096:
-                # Pokušajte da skratite sa zadržavanjem strukture ako je moguće,
-                # npr. skratiti traceback
-                truncated_message = message[:4000] # Grubo skraćivanje
-                if not truncated_message.endswith("```"): # Proverite da li se prekinuo kod blok
-                    truncated_message += "..." # Dodajte elipsu
-                message = truncated_message
+            # Finalna provera dužine poruke pre slanja
+            MAX_TOTAL_MESSAGE_LEN = 4096 # Telegram limit
+            if len(message) > MAX_TOTAL_MESSAGE_LEN:
+                message = message[:MAX_TOTAL_MESSAGE_LEN - 50] + "\n\n... (message truncated)" # Dodajte elipsu na kraju
 
             await context.bot.send_message(
                 chat_id=DEVELOPER_CHAT_ID, text=message, parse_mode=ParseMode.MARKDOWN_V2
