@@ -23,7 +23,8 @@ load_dotenv()
 print(f"Bot se pokreće sa najnovijim kodom! Vreme pokretanja: {datetime.datetime.now()}")
 
 # Konfiguracija logginga
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+# Promenjeno na DEBUG za detaljnije logove
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 # --- Stanja za ConversationHandler ---
@@ -476,11 +477,23 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
         # --- KRAJ NOVOG DEO KODA ---
 
-        keyboard = [[InlineKeyboardButton(messages["send_sketch_button"], callback_data='send_sketch_now')]]
+        # *************** IZMENJENI DEO: Slanje skice postaje opcionalno ***************
+        keyboard = [
+            [InlineKeyboardButton(messages["send_sketch_button"], callback_data='send_sketch_now')],
+            [InlineKeyboardButton(messages["no_sketch_button"], callback_data='no_sketch_needed')] # NOVO DUGME
+        ]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.message.reply_text(messages["request_sketch"], reply_markup=reply_markup)
+        await query.message.reply_text(messages["request_sketch_optional"], reply_markup=reply_markup) # NOVA PORUKA
         
         return AWAITING_SKETCH
+
+    elif callback_data == 'no_sketch_needed': # NOVI USLOV ZA PRESKAKANJE SKICE
+        user_id = query.from_user.id
+        messages = load_messages(user_data[user_id]['lang'])
+        logger.info(f"Korisnik {user_id}: Odabrano da ne želi da pošalje skicu.")
+        await query.edit_message_text(messages["no_sketch_confirmation"]) # Potvrdna poruka
+        await show_main_menu(update, context, user_id) # Vraćanje na glavni meni
+        return ConversationHandler.END # Završavamo konverzaciju
 
     elif callback_data.startswith('hp_type_'):
         hp_type_chosen = callback_data.split('_')[2] 
@@ -633,7 +646,8 @@ async def request_sketch_entry(update: Update, context: ContextTypes.DEFAULT_TYP
     if update.callback_query and update.callback_query.data == 'send_sketch_now':
         await update.callback_query.edit_message_text(text=messages["request_sketch"])
     else:
-        await update.message.reply_text(messages["request_sketch"])
+        # Ovo se možda neće dešavati često, ali je fallback
+        await update.message.reply_text(messages["request_sketch"]) 
         
     return AWAITING_SKETCH
 
@@ -660,8 +674,10 @@ async def handle_sketch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         return AWAITING_SKETCH # Ostani u istom stanju
 
     file_telegram = await context.bot.get_file(file_id)
+    # Koristimo /tmp za preuzimanje fajlova na Renderu, jer je to writable directory
     download_path = os.path.join("/tmp", file_name) 
 
+    # Kreiramo /tmp direktorijum ako ne postoji (važno za Render)
     os.makedirs("/tmp", exist_ok=True) 
 
     await file_telegram.download_to_drive(download_path)
@@ -715,7 +731,7 @@ async def cancel_sketch_request(update: Update, context: ContextTypes.DEFAULT_TY
     user_id = update.effective_user.id
     messages = load_messages(user_data[user_id]['lang'])
     logger.debug(f"Otkazivanje skice za korisnika {user_id}. user_data[{user_id}]: {user_data[user_id]}")
-    await update.message.reply_text("Slanje skice je otkazano.")
+    await update.message.reply_text(messages["no_sketch_confirmation"]) # Koristi istu poruku
     await show_main_menu(update, context, user_id)
     return ConversationHandler.END
 
@@ -742,7 +758,8 @@ def main() -> None:
         states={
             AWAITING_SKETCH: [
                 MessageHandler(filters.PHOTO | filters.Document.ALL, handle_sketch),
-                CommandHandler("cancel", cancel_sketch_request)
+                CommandHandler("cancel", cancel_sketch_request), # Omogućava /cancel tokom slanja skice
+                CallbackQueryHandler(button_callback, pattern='^no_sketch_needed$') # Obrada dugmeta "Ne želim skicu"
             ]
         },
         fallbacks=[CommandHandler("start", start), CommandHandler("cancel", cancel_sketch_request)]
