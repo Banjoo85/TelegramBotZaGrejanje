@@ -538,7 +538,7 @@ def main() -> None:
     persistence = PicklePersistence(filepath="my_bot_data.pkl")
 
     # Inicijalizacija ApplicationBuilder: Korišćenje direktnog konstruktora
-    application = ApplicationBuilder(token=TELEGRAM_BOT_TOKEN, persistence=persistence).build()
+    application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).persistence(persistence).build()
 
     # ConversationHandler mora biti definisan NAKON svih funkcija koje koristi
     conv_handler = ConversationHandler(
