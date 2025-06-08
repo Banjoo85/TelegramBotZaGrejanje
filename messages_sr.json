@@ -27,7 +27,7 @@
     "sketch_received": "Hvala! Vaša skica je primljena i prosleđena izvođaču. Uskoro će vas kontaktirati.",
     "choose_heat_pump_type": "Molim vas, izaberite tip toplotne pumpe:",
     "contractor_info": "Kontakt za grejne instalacije:\n**Telefon:** {phone}\n**Email:** {email}{website_info}{telegram_info}\n\nKontaktiraće vas uskoro za detalje i ponudu.",
-    "hp_offer_info": "Evo kontakta za toplotne pumpe tipa **{hp_type}** u **{country_name}**:\nTelefon: **{phone}**\nEmail: **{email}**{website_info}\n\nKontaktiraće vas uskoro za detalje i ponudu.",
+    "hp_offer_info": "Evo kontakta za toplotne pumpe tipa **{hp_type}** u **{country_name}**:\n**Telefon:** {phone}\n**Email:** {email}{website_info}{telegram_info}\n\nKontaktiraće vas uskoro za detalje i ponudu.",
     "send_sketch_button": "Pošalji skicu",
     "no_sketch_button": "Ne želim da pošaljem skicu",         
     "request_sketch_optional": "Želite li da pošaljete skicu objekta sa dimenzijama (tlocrt/osnova) za precizniju ponudu? To je opciono.",
