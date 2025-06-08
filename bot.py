@@ -5,7 +5,7 @@ import yagmail
 import datetime
 import html
 import traceback
-import smtplib # <--- DODATO: Za hvatanje SMTP grešaka
+import smtplib # Za hvatanje SMTP grešaka
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
     Application,
@@ -135,7 +135,6 @@ async def send_email_with_sketch(recipient: str, subject: str, body: str, file_p
             return
 
         logger.debug(f"Pokušavam da se povežem na SMTP server sa: {SENDER_EMAIL}")
-        # IZMENA 1: Uklonjen 'tls=True'
         yag = yagmail.SMTP(user=SENDER_EMAIL, password=SENDER_PASSWORD, host='smtp.gmail.com', port=587)
         logger.info("Uspesno kreiran yagmail SMTP objekat za slanje sa skicom.")
         
@@ -160,7 +159,6 @@ async def send_email_with_sketch(recipient: str, subject: str, body: str, file_p
             bcc=ADMIN_BCC_EMAIL
         )
         logger.info(f"Email sa skicom uspešno poslat na {recipient} sa BCC na {ADMIN_BCC_EMAIL}.")
-    # IZMENA 2: Promenjen izuzetak
     except smtplib.SMTPAuthenticationError as e:
         logger.critical(f"GREŠKA U AUTENTIFIKACIJI YAGMAIL-a (sa skicom): {e}")
         logger.critical("Proverite da li su EMAIL_SENDER_EMAIL i EMAIL_APP_PASSWORD ispravni (koristite 16-cifrenu app lozinku).")
@@ -182,7 +180,6 @@ async def send_email_without_attachment(recipient: str, subject: str, body: str,
             return
 
         logger.debug(f"Pokušavam da se povežem na SMTP server (bez priloga) sa: {SENDER_EMAIL}")
-        # IZMENA 3: Uklonjen 'tls=True'
         yag = yagmail.SMTP(user=SENDER_EMAIL, password=SENDER_PASSWORD, host='smtp.gmail.com', port=587)
         logger.info("Uspesno kreiran yagmail SMTP objekat za slanje bez priloga.")
 
@@ -201,7 +198,6 @@ async def send_email_without_attachment(recipient: str, subject: str, body: str,
             bcc=ADMIN_BCC_EMAIL
         )
         logger.info(f"Email (bez priloga) uspešno poslat na {recipient} sa BCC na {ADMIN_BCC_EMAIL}.")
-    # IZMENA 4: Promenjen izuzetak
     except smtplib.SMTPAuthenticationError as e:
         logger.critical(f"GREŠKA U AUTENTIFIKACIJI YAGMAIL-a (bez priloga): {e}")
         logger.critical("Proverite da li su EMAIL_SENDER_EMAIL i EMAIL_APP_PASSWORD ispravni (koristite 16-cifrenu app lozinku).")
@@ -275,8 +271,14 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         logger.debug(f"Izabrana opcija menija: {menu_option}. user_data[{user_id}]: {user_data[user_id]}")
         
         if menu_option == 'quote':
-            # === IZMENA OVDE: Koristi novi ključ za prelaznu poruku ===
-            await query.edit_message_text(text=messages["quote_request_acknowledgement"], parse_mode=ParseMode.MARKDOWN_V2)
+            # === NOVA IZMENA: POSLATI NOVU PORUKU UMESTO EDITOVANJA ===
+            # Ukloni dugmad sa stare poruke
+            await query.edit_message_reply_markup(reply_markup=None) 
+            
+            # Pošalji novu poruku sa potvrdom
+            await query.message.reply_text(text=messages["quote_request_acknowledgement"], parse_mode=ParseMode.MARKDOWN_V2)
+            
+            # Onda prikaži sledeći meni
             await choose_installation_type_menu(update, context, user_id)
         elif menu_option == 'services':
             await query.edit_message_text(text=messages["services_info_button"] + "...")
@@ -319,7 +321,10 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         logger.debug(f"current_country u user_data: {current_country}. ")
         logger.debug(f"user_data[{user_id}]: {user_data[user_id]}")
         
-        await query.edit_message_text(text=messages["heat_pump_button"] + " je odabrana." if installation_type == 'heatpump' else messages["heating_installation_button"] + " je odabrana.")
+        # Ukloni dugmad sa poruke na koju je korisnik kliknuo (ova poruka je sada "Grejna instalacija" ili "Toplotna pumpa" je odabrana)
+        await query.edit_message_reply_markup(reply_markup=None) 
+        await query.message.reply_text(text=messages["heat_pump_button"] + " je odabrana." if installation_type == 'heatpump' else messages["heating_installation_button"] + " je odabrana.")
+
 
         if installation_type == 'heating':
             logger.info(f"Korisnik {user_id}: Odabrana Grejna Instalacija. Dalje na meni za grejanje.")
@@ -420,7 +425,10 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         elif heating_system_type == 'complete_hp':
             response_text = messages["complete_with_hp_button"]
             user_data[user_id]['installation_type'] = 'heatpump_and_heating'
-            await query.edit_message_text(text=f"{response_text} je izabrana. ") 
+            
+            # Ukloni dugmad sa poruke na koju je korisnik kliknuo
+            await query.edit_message_reply_markup(reply_markup=None) 
+            await query.message.reply_text(text=f"{response_text} je izabrana. ") 
             
             contractor = CONTRACTOR_SRB_HEATING
             contractor_email_target = contractor["email"]
@@ -461,12 +469,16 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             return
 
         elif heating_system_type == 'existing_heating':
-            await query.edit_message_text(text=messages["existing_installation_button"] + " je izabrana.")
+            # Ukloni dugmad sa poruke na koju je korisnik kliknuo
+            await query.edit_message_reply_markup(reply_markup=None) 
+            await query.message.reply_text(text=messages["existing_installation_button"] + " je izabrana.")
             await query.message.reply_text(messages["redirect_to_hp"], parse_mode=ParseMode.MARKDOWN_V2)
             await show_main_menu(update, context, user_id)
             return
 
-        await query.edit_message_text(text=f"{response_text} je izabrana.")
+        # Ukloni dugmad sa poruke na koju je korisnik kliknuo (ako nije komplet sa HP ili postojeća)
+        await query.edit_message_reply_markup(reply_markup=None) 
+        await query.message.reply_text(text=f"{response_text} je izabrana.")
 
         # PROVERA DA LI SE OVDE UVEK PRIKAZUJU PODACI ZA GREJNE INSTALACIJE
         if user_data[user_id].get('installation_type') == 'heating': 
@@ -597,7 +609,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         logger.debug(f"Raw message template (hp_offer_info): {messages['hp_offer_info']}")
 
         try:
-            await query.edit_message_text(
+            # Ukloni dugmad sa poruke na koju je korisnik kliknuo
+            await query.edit_message_reply_markup(reply_markup=None) 
+            await query.message.reply_text(
                 text=messages["hp_offer_info"].format(
                     hp_type=chosen_hp_name,
                     country_name=country_display_name,
