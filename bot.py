@@ -107,6 +107,7 @@ HEAT_PUMP_OFFERS = {
     }
 }
 
+# Globalni user_data rečnik
 user_data = {}
 
 def load_messages(lang_code: str):
@@ -207,10 +208,14 @@ async def send_email_without_attachment(recipient: str, subject: str, body: str,
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
+    logger.debug(f"start funkcija pozvana za korisnika {user_id}")
     # Inicijalizacija user_data za korisnika ako ne postoji
     if user_id not in user_data:
-        user_data[user_id] = {'lang': 'en'} # Podrazumevani jezik dok korisnik ne izabere
+        user_data[user_id] = {'lang': 'en', 'session_active': True} # Podrazumevani jezik dok korisnik ne izabere
         logger.debug(f"Inicijalizovan user_data za novog korisnika {user_id}: {user_data[user_id]}")
+    else:
+        user_data[user_id]['session_active'] = True # Resetuj status sesije na aktivnu
+        logger.debug(f"Postojeći user_data za korisnika {user_id}: {user_data[user_id]}")
     
     messages = load_messages(user_data[user_id]['lang'])
 
@@ -221,6 +226,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(messages["start_message"], reply_markup=reply_markup)
+    logger.info(f"Korisnik {user_id} je dobio start poruku.")
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int | None:
     query = update.callback_query
@@ -230,38 +236,51 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     callback_data = query.data
     logger.debug(f"Obradjuje se callback_data: {callback_data} za korisnika {user_id}")
     
-    # --- KRITIČNA IZMENA: Proverite i inicijalizujte user_data ako nedostaje ---
-    if user_id not in user_data:
-        user_data[user_id] = {'lang': 'en'} # Podrazumevani jezik ako korisnik nije prošao kroz /start
-        logger.warning(f"user_data[{user_id}] nije pronađen. Inicijalizovan sa podrazumevanim jezikom 'en'.")
-        # Nakon inicijalizacije, preusmerite korisnika na start meni, jer mu nedostaje kontekst
-        messages = load_messages(user_data[user_id]['lang']) # Učitajte poruke sa default jezikom
-        await query.edit_message_text(text=messages["session_expired_restart_needed"], parse_mode=ParseMode.MARKDOWN_V2) # Obavestite korisnika
-        await start(update, context) # Pozovite start handler da mu prikažete početni meni
-        return ConversationHandler.END # Završite ConversationHandler ako je u njemu, jer je sesija resetovana
+    # --- KRITIČNA IZMENA: Robusnija provera i oporavak user_data ---
+    if user_id not in user_data or not user_data[user_id].get('lang') or not user_data[user_id].get('country'):
+        logger.warning(f"user_data[{user_id}] nije potpuno inicijalizovan/izgubljen. Pokušavam da oporavim sesiju.")
+        user_data[user_id] = {'lang': 'en', 'session_active': False} # Inicijalizovan sa default jezikom, ali označen kao neaktivan
+        messages = load_messages('en') # Učitajte poruke sa default jezikom (engleski kao fallback)
+        try:
+            # Uklonite stare dugmad i pošaljite poruku o isteku sesije
+            await query.edit_message_reply_markup(reply_markup=None) # Pokušaj da ukloniš dugmad sa poruke
+            await context.bot.send_message(chat_id=user_id, text=messages["session_expired_restart_needed"], parse_mode=ParseMode.MARKDOWN_V2) 
+            logger.info(f"Poslata poruka o isteku sesije korisniku {user_id}.")
+            
+            # Ponudite im da krenu ispočetka sa show_main_menu, ili čak start
+            await show_main_menu(update, context, user_id) 
+            return ConversationHandler.END # Završite ConversationHandler ako je u njemu
+        except Exception as e:
+            logger.error(f"Greška prilikom obaveštavanja korisnika o isteku sesije: {e}", exc_info=True)
+            # Ako čak ni ovo ne radi, pošaljite start komandu kao poslednju opciju
+            await context.bot.send_message(chat_id=user_id, text="Došlo je do greške u sesiji. Molimo kucajte /start da biste počeli ispočetka.")
+            return ConversationHandler.END 
     # --- KRAJ KRITIČNE IZMENE ---
-
+    
+    messages = load_messages(user_data[user_id]['lang']) # Učitajte poruke sa validnim jezikom
     logger.debug(f"user_data[{user_id}] na početku callback-a: {user_data.get(user_id)}")
 
     if callback_data.startswith('lang_'):
         lang_code = callback_data.split('_')[1]
         user_data[user_id]['lang'] = lang_code
+        user_data[user_id]['session_active'] = True # Potvrdi sesiju kao aktivnu
         messages = load_messages(lang_code)
         await query.edit_message_text(text=messages["language_selected"])
-        logger.debug(f"Jezik postavljen na {lang_code}. user_data[{user_id}]: {user_data[user_id]}")
+        logger.debug(f"Jezik postavljen na {lang_code}. user_data[{user_id}]: {user_data[user_id]}") # Dodatni log
         
         await choose_country(update, context, user_id)
 
     elif callback_data.startswith('country_'):
         country_code = "_".join(callback_data.split('_')[1:]) 
         user_data[user_id]['country'] = country_code
+        user_data[user_id]['session_active'] = True # Potvrdi sesiju kao aktivnu
         
         messages = load_messages(user_data[user_id]['lang'])
         country_name_key = f"{country_code}_name"
         country_display_name = messages.get(country_name_key, country_code.capitalize())
         
         await query.edit_message_text(text=messages["country_selected"].format(country_name=country_display_name))
-        logger.debug(f"Zemlja postavljena na {country_code}. user_data[{user_id}]: {user_data[user_id]}")
+        logger.debug(f"Zemlja postavljena na {country_code}. user_data[{user_id}]: {user_data[user_id]}") # Dodatni log
         
         await show_main_menu(update, context, user_id)
 
@@ -272,12 +291,25 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         
         if menu_option == 'quote':
             # Ukloni dugmad sa stare poruke
-            await query.edit_message_reply_markup(reply_markup=None) 
-            
-            # --- IZMENJENA LINIJA: KORISTITE context.bot.send_message ---
-            await context.bot.send_message(chat_id=user_id, text=messages["quote_request_acknowledgement"], parse_mode=ParseMode.MARKDOWN_V2)
-            
+            logger.debug(f"Korisnik {user_id} izabrao 'Zatraži ponudu'. Uklanjam dugmad sa poruke ID: {query.message.message_id}")
+            try:
+                await query.edit_message_reply_markup(reply_markup=None) 
+            except Exception as e:
+                logger.warning(f"Greška prilikom uklanjanja dugmadi sa poruke (možda je već obrisana/editovana): {e}")
+
+            # === Izmenjena linija: Uklonjen parse_mode potpuno za ovu poruku ===
+            logger.debug(f"Pokušavam da pošaljem acknowledgement poruku korisniku {user_id}. Tekst: '{messages.get('quote_request_acknowledgement', 'N/A')}'")
+            try:
+                await context.bot.send_message(chat_id=user_id, text=messages["quote_request_acknowledgement"])
+                logger.debug(f"Acknowledgement poruka uspešno poslata korisniku {user_id}.")
+            except Exception as e:
+                logger.error(f"FATALNA GREŠKA prilikom slanja 'quote_request_acknowledgement' poruke korisniku {user_id}: {e}", exc_info=True)
+                # Ako ovde pukne, to je ozbiljan problem sa Telegram API-jem ili TOKEN-om
+                await context.bot.send_message(chat_id=user_id, text=messages.get("error_occurred", "Došlo je do neočekivane greške. Molimo pokušajte ponovo ili kucajte /start."))
+                return
+
             # Onda prikaži sledeći meni
+            logger.debug(f"Pozivam choose_installation_type_menu za korisnika {user_id}. User_data: {user_data.get(user_id)}")
             await choose_installation_type_menu(update, context, user_id)
         elif menu_option == 'services':
             await query.edit_message_text(text=messages["services_info_button"] + "...")
@@ -533,10 +565,10 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     elif callback_data == 'no_sketch_needed':
         user_id = query.from_user.id
         # Proverite da li user_data[user_id] postoji pre pristupa
-        if user_id not in user_data:
+        if user_id not in user_data or not user_data[user_id].get('lang'):
             user_data[user_id] = {'lang': 'en'} # Fallback
             logger.warning(f"user_data[{user_id}] nije pronađen u 'no_sketch_needed'. Inicijalizovan.")
-            messages = load_messages(user_data[user_id]['lang']) # Učitajte poruke
+            messages = load_messages(user_data[user_id]['lang']) 
             await query.edit_message_text(text=messages["session_expired_restart_needed"], parse_mode=ParseMode.MARKDOWN_V2)
             await start(update, context)
             return ConversationHandler.END
@@ -551,7 +583,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         hp_type_chosen = callback_data.split('_')[2] 
         user_id = query.from_user.id
         # Proverite da li user_data[user_id] i 'lang'/'country' postoje pre pristupa
-        if user_id not in user_data or 'lang' not in user_data[user_id] or 'country' not in user_data[user_id]:
+        if user_id not in user_data or not user_data[user_id].get('lang') or not user_data[user_id].get('country'):
             user_data[user_id] = {'lang': 'en'} # Fallback
             logger.warning(f"user_data[{user_id}] nije potpuno inicijalizovan u 'hp_type_'. Inicijalizovan.")
             messages = load_messages(user_data[user_id]['lang']) # Učitajte poruke
@@ -631,13 +663,11 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 
 async def choose_country(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int) -> None:
-    # Proverite da li user_data[user_id] postoji pre pristupa
-    if user_id not in user_data:
-        user_data[user_id] = {'lang': 'en'} # Fallback
-        logger.warning(f"user_data[{user_id}] nije pronađen u 'choose_country'. Inicijalizovan.")
-        messages = load_messages(user_data[user_id]['lang'])
-        await context.bot.send_message(chat_id=user_id, text=messages["session_expired_restart_needed"], parse_mode=ParseMode.MARKDOWN_V2)
-        return
+    # Provera da li user_data[user_id] postoji pre pristupa
+    if user_id not in user_data or not user_data[user_id].get('lang'): # Proverite lang
+        logger.warning(f"user_data[{user_id}] nije pronađen/potpun u 'choose_country'. Prekidam.")
+        # Oporavak se desava u button_callback, ovde samo prekidamo da izbegnemo dalju gresku
+        return 
 
     messages = load_messages(user_data[user_id]['lang'])
     logger.debug(f"Prikazivanje izbora zemlje za korisnika {user_id}. user_data[{user_id}]: {user_data[user_id]}")
@@ -650,13 +680,10 @@ async def choose_country(update: Update, context: ContextTypes.DEFAULT_TYPE, use
     await context.bot.send_message(chat_id=user_id, text=messages["choose_country"], reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN_V2)
 
 async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int) -> None:
-    # Proverite da li user_data[user_id] postoji pre pristupa
-    if user_id not in user_data:
-        user_data[user_id] = {'lang': 'en'} # Fallback
-        logger.warning(f"user_data[{user_id}] nije pronađen u 'show_main_menu'. Inicijalizovan.")
-        messages = load_messages(user_data[user_id]['lang'])
-        await context.bot.send_message(chat_id=user_id, text=messages["session_expired_restart_needed"], parse_mode=ParseMode.MARKDOWN_V2)
-        return
+    # Provera da li user_data[user_id] postoji pre pristupa
+    if user_id not in user_data or not user_data[user_id].get('lang') or not user_data[user_id].get('country'):
+        logger.warning(f"user_data[{user_id}] nije pronađen/potpun u 'show_main_menu'. Prekidam.")
+        return 
 
     messages = load_messages(user_data[user_id]['lang'])
     logger.debug(f"Prikazivanje glavnog menija za korisnika {user_id}. user_data[{user_id}]: {user_data[user_id]}")
@@ -671,32 +698,46 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, use
     await context.bot.send_message(chat_id=user_id, text=messages["main_menu_greeting"], reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN_V2)
 
 async def choose_installation_type_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int) -> None:
-    # Proverite da li user_data[user_id] postoji pre pristupa
-    if user_id not in user_data:
-        user_data[user_id] = {'lang': 'en'} # Fallback
-        logger.warning(f"user_data[{user_id}] nije pronađen u 'choose_installation_type_menu'. Inicijalizovan.")
-        messages = load_messages(user_data[user_id]['lang'])
-        await context.bot.send_message(chat_id=user_id, text=messages["session_expired_restart_needed"], parse_mode=ParseMode.MARKDOWN_V2)
-        return
+    logger.debug(f"Pokušavam da prikažem meni za izbor tipa instalacije za korisnika {user_id}.")
+    try:
+        # Proverite da li user_data[user_id] postoji pre pristupa
+        if user_id not in user_data or not user_data[user_id].get('lang'):
+            logger.warning(f"user_data[{user_id}] nije pronađen/potpun u 'choose_installation_type_menu'. Inicijalizovan/Prekidam.")
+            # Oporavak se desava u button_callback, ovde samo prekidamo da izbegnemo dalju gresku
+            return
 
-    messages = load_messages(user_data[user_id]['lang'])
-    logger.debug(f"Prikazivanje izbora tipa instalacije za korisnika {user_id}. user_data[{user_id}]: {user_data[user_id]}")
-    
-    keyboard = [
-        [InlineKeyboardButton(messages["heating_installation_button"], callback_data='type_heating')],
-        [InlineKeyboardButton(messages["heat_pump_button"], callback_data='type_heatpump')],
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await context.bot.send_message(chat_id=user_id, text=messages["choose_installation_type"], reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN_V2)
+        messages = load_messages(user_data[user_id]['lang'])
+        logger.debug(f"Učitane poruke za jezik: {user_data[user_id]['lang']}")
+        logger.debug(f"user_data[{user_id}] pre kreiranja tastature: {user_data[user_id]}")
+
+        keyboard = [
+            [InlineKeyboardButton(messages["heating_installation_button"], callback_data='type_heating')],
+            [InlineKeyboardButton(messages["heat_pump_button"], callback_data='type_heatpump')],
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        logger.debug("Tastatura za izbor tipa instalacije uspešno kreirana.")
+
+        chat_id_to_send = update.effective_chat.id if update.effective_chat else user_id
+        logger.debug(f"Šaljem poruku 'choose_installation_type' na chat_id: {chat_id_to_send}")
+
+        # === Izmenjena linija: Uklonjen parse_mode potpuno za ovu poruku ===
+        await context.bot.send_message(chat_id=chat_id_to_send, text=messages["choose_installation_type"], reply_markup=reply_markup)
+        logger.info(f"Uspešno prikazan meni za izbor tipa instalacije za korisnika {user_id}.")
+
+    except Exception as e:
+        logger.error(f"GREŠKA u funkciji choose_installation_type_menu za korisnika {user_id}: {e}", exc_info=True)
+        # Pokušajte da obavestite korisnika o grešci
+        try:
+            messages = load_messages(user_data.get(user_id, {}).get('lang', 'en'))
+            await context.bot.send_message(chat_id=user_id, text=messages.get("error_displaying_menu", "Došlo je do greške prilikom prikazivanja menija. Molimo pokušajte ponovo."), parse_mode=ParseMode.MARKDOWN_V2)
+        except Exception as notify_e:
+            logger.error(f"Neuspelo slanje poruke o grešci korisniku {user_id}: {notify_e}")
 
 async def choose_heating_system_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int) -> None:
-    # Proverite da li user_data[user_id] postoji pre pristupa
-    if user_id not in user_data:
-        user_data[user_id] = {'lang': 'en'} # Fallback
-        logger.warning(f"user_data[{user_id}] nije pronađen u 'choose_heating_system_menu'. Inicijalizovan.")
-        messages = load_messages(user_data[user_id]['lang'])
-        await context.bot.send_message(chat_id=user_id, text=messages["session_expired_restart_needed"], parse_mode=ParseMode.MARKDOWN_V2)
-        return
+    # Provera da li user_data[user_id] postoji pre pristupa
+    if user_id not in user_data or not user_data[user_id].get('lang'):
+        logger.warning(f"user_data[{user_id}] nije pronađen/potpun u 'choose_heating_system_menu'. Prekidam.")
+        return 
 
     messages = load_messages(user_data[user_id]['lang'])
     logger.debug(f"Prikazivanje izbora grejnog sistema za korisnika {user_id}. user_data[{user_id}]: {user_data[user_id]}")
@@ -714,13 +755,10 @@ async def choose_heating_system_menu(update: Update, context: ContextTypes.DEFAU
 
 
 async def show_heat_pump_options(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int) -> None:
-    # Proverite da li user_data[user_id] i 'lang'/'country' postoje pre pristupa
-    if user_id not in user_data or 'lang' not in user_data[user_id] or 'country' not in user_data[user_id]:
-        user_data[user_id] = {'lang': 'en'} # Fallback
-        logger.warning(f"user_data[{user_id}] nije potpuno inicijalizovan u 'show_heat_pump_options'. Inicijalizovan.")
-        messages = load_messages(user_data[user_id]['lang'])
-        await context.bot.send_message(chat_id=user_id, text=messages["session_expired_restart_needed"], parse_mode=ParseMode.MARKDOWN_V2)
-        return
+    # Provera da li user_data[user_id] i 'lang'/'country' postoje pre pristupa
+    if user_id not in user_data or not user_data[user_id].get('lang') or not user_data[user_id].get('country'):
+        logger.warning(f"user_data[{user_id}] nije potpuno inicijalizovan u 'show_heat_pump_options'. Prekidam.")
+        return 
 
     current_lang = user_data[user_id]['lang']
     current_country = user_data[user_id]['country']
@@ -750,10 +788,9 @@ async def show_heat_pump_options(update: Update, context: ContextTypes.DEFAULT_T
 async def request_sketch_entry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_id = update.effective_user.id
     # Proverite da li user_data[user_id] postoji pre pristupa
-    if user_id not in user_data:
-        user_data[user_id] = {'lang': 'en'} # Fallback
-        logger.warning(f"user_data[{user_id}] nije pronađen u 'request_sketch_entry'. Inicijalizovan.")
-        messages = load_messages(user_data[user_id]['lang'])
+    if user_id not in user_data or not user_data[user_id].get('lang'):
+        logger.warning(f"user_data[{user_id}] nije pronađen u 'request_sketch_entry'. Prekidam.")
+        messages = load_messages('en') # Koristite default jezik
         await update.effective_chat.send_message(text=messages["session_expired_restart_needed"], parse_mode=ParseMode.MARKDOWN_V2)
         return ConversationHandler.END # Završava konverzaciju i vraća na početak
 
@@ -770,10 +807,9 @@ async def request_sketch_entry(update: Update, context: ContextTypes.DEFAULT_TYP
 async def handle_sketch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_id = update.effective_user.id
     # Proverite da li user_data[user_id] postoji pre pristupa
-    if user_id not in user_data:
-        user_data[user_id] = {'lang': 'en'} # Fallback
-        logger.warning(f"user_data[{user_id}] nije pronađen u 'handle_sketch'. Inicijalizovan.")
-        messages = load_messages(user_data[user_id]['lang'])
+    if user_id not in user_data or not user_data[user_id].get('lang'):
+        logger.warning(f"user_data[{user_id}] nije pronađen u 'handle_sketch'. Prekidam.")
+        messages = load_messages('en') # Koristite default jezik
         await update.message.reply_text(text=messages["session_expired_restart_needed"], parse_mode=ParseMode.MARKDOWN_V2)
         return ConversationHandler.END # Završava konverzaciju
 
@@ -853,10 +889,9 @@ async def handle_sketch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 async def cancel_sketch_request(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_id = update.effective_user.id
     # Proverite da li user_data[user_id] postoji pre pristupa
-    if user_id not in user_data:
-        user_data[user_id] = {'lang': 'en'} # Fallback
-        logger.warning(f"user_data[{user_id}] nije pronađen u 'cancel_sketch_request'. Inicijalizovan.")
-        messages = load_messages(user_data[user_id]['lang']) # Učitajte poruke
+    if user_id not in user_data or not user_data[user_id].get('lang'):
+        logger.warning(f"user_data[{user_id}] nije pronađen u 'cancel_sketch_request'. Prekidam.")
+        messages = load_messages('en') 
         await update.message.reply_text(text=messages["session_expired_restart_needed"], parse_mode=ParseMode.MARKDOWN_V2)
         return ConversationHandler.END
 
