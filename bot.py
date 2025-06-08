@@ -735,7 +735,10 @@ async def request_sketch_entry(update: Update, context: ContextTypes.DEFAULT_TYP
         user_data[user_id] = {'lang': 'en'} # Fallback
         logger.warning(f"user_data[{user_id}] nije pronađen u 'request_sketch_entry'. Inicijalizovan.")
         messages = load_messages(user_data[user_id]['lang'])
-        await update.effective_chat.send_message(text=messages["session_expired_restart_needed"], parse_mode=ParseMode.MARKDOWN_V2)
+        await update.effective_chat.send_message(
+                messages.get("error_occurred", "An unexpected error occurred. Please try again or type /start.")
+                # Nema parse_mode parametra, jer ova poruka ne zahteva Markdown formatiranje
+            )
         return ConversationHandler.END # Završava konverzaciju i vraća na početak
 
     messages = load_messages(user_data[user_id]['lang'])
