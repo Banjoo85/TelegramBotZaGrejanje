@@ -26,12 +26,6 @@ logger = logging.getLogger(__name__)
 # Stanja za ConversationHandler
 CHOOSE_INSTALLATION_TYPE, CHOOSE_HEATING_SYSTEM, UPLOAD_SKETCH, CHOOSE_HEAT_PUMP_TYPE = range(4)
 
-# Učitavanje tokena i webhook URL-a
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")
-IS_LOCAL = os.getenv("IS_LOCAL", "True").lower() == "true"
-PORT = int(os.environ.get("PORT", 8443))
-
 # --- PODACI ZA KONTAKT I ADMINI ---
 # Podaci za kontakt
 contact_info = {
@@ -66,10 +60,15 @@ contact_info = {
 
 # Telegram ID-ovi admina koji će primati obaveštenja (TVOJ ID TREBA DA BUDE OVDE)
 ADMIN_IDS = [
-    6869162490, # ZAMENI OVO SA SVOJIM TELEGRAM ID-jem (ADMIN ID 1)
-    # AKO IMAŠ VIŠE ADMINA, DODAJ IH OVDE (ADMIN ID 2)
+6869162490, # ZAMENI OVO SA SVOJIM TELEGRAM ID-jem (ADMIN ID 1)
 ]
 # --- KRAJ SEKCIJE PODATAKA ---
+
+# Učitavanje tokena i webhook URL-a
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")
+IS_LOCAL = os.getenv("IS_LOCAL", "True").lower() == "true"
+PORT = int(os.environ.get("PORT", 8443))
 
 # Funkcija za učitavanje poruka
 def load_messages(lang: str) -> dict:
@@ -103,6 +102,82 @@ async def notify_admins(context: ContextTypes.DEFAULT_TYPE, message: str) -> Non
             logger.info(f"Obaveštenje poslato adminu {admin_id}")
         except Exception as e:
             logger.error(f"Greška prilikom slanja obaveštenja adminu {admin_id}: {e}")
+
+# Funkcija za pružanje kontakt informacija (DEFINICIJA OVE FUNKCIJE JE SADA IZNAD SVIH POZIVA)
+async def offer_contact_info(update: Update, context: ContextTypes.DEFAULT_TYPE, context_type: str) -> int:
+    user_id = update.effective_user.id
+    messages = context.user_data[user_id]['messages']
+    
+    country = context.user_data[user_id].get('country', 'srbija') # Default na Srbiju
+    
+    # Uzimanje podataka za IZVOĐAČA na osnovu zemlje
+    # Ovo će biti "contractor" rečnik unutar 'srbija' ili 'crna_gora'
+    contractor_contacts = contact_info.get(country, {}).get('contractor')
+    if not contractor_contacts: # Fallback ako podaci za contractor nisu pronađeni (ne bi trebalo)
+        contractor_contacts = contact_info['srbija']['contractor']
+        logger.warning(f"Nisu pronađeni podaci za izvođača za zemlju {country}, korišćeni podaci za Srbiju.")
+    
+    phone_contractor = contractor_contacts['phone']
+    email_contractor = contractor_contacts['email']
+    website_contractor_info = f"\\n🌐 \\*Website\\:* {contractor_contacts['website']}" if contractor_contacts.get('website') else ""
+    telegram_contractor_info = f"\\n💬 \\*Telegram Podrška\\:* {contractor_contacts['telegram']}" if contractor_contacts.get('telegram') else ""
+
+    response_text = ""
+
+    # Ako je zemlja Srbija, dodajemo i podatke o PROIZVOĐAČU
+    manufacturer_details_text = ""
+    if country == 'srbija' and 'manufacturer' in contact_info['srbija']:
+        manufacturer_data = contact_info['srbija']['manufacturer']
+        manufacturer_name = manufacturer_data['name']
+        manufacturer_phone = manufacturer_data.get('phone', 'N/A')
+        manufacturer_email = manufacturer_data.get('email', 'N/A')
+        manufacturer_website_info = f"\\n🌐 \\*Website\\:* {manufacturer_data['website']}" if manufacturer_data.get('website') else ""
+        manufacturer_telegram_info = f"\\n💬 \\*Telegram Podrška\\:* {manufacturer_data['telegram']}" if manufacturer_data.get('telegram') else ""
+
+        manufacturer_details_text = (
+            f"\\n\\n---\\n\\n\\*Kontakt za Proizvođača \\({manufacturer_name}\\)\\*:" # Dupla kosa crta za - i (
+            f"\\n📞 \\*Telefon\\:* `{manufacturer_phone}`"
+            f"\\n✉️ \\*Email\\:* {manufacturer_email}"
+            f"{manufacturer_website_info}"
+            f"{manufacturer_telegram_info}"
+        )
+
+    # Generisanje poruke za izvođača
+    contractor_message_part = messages["contractor_info"].format(
+        phone=phone_contractor,
+        email=email_contractor,
+        website_info=website_contractor_info,
+        telegram_info=telegram_contractor_info
+    )
+
+    if context_type == "hp_quote":
+        hp_type_chosen = context.user_data[user_id].get('hp_type', 'neodređeni tip').replace("_", " ").title()
+        country_name = messages["srbija_button"].replace(" 🇷🇸", "") if country == 'srbija' else messages["crna_gora_button"].replace(" 🇲🇪", "")
+        
+        # Prikazujemo informacije o izvođaču za TP ponudu
+        response_text = messages["hp_offer_info"].format(
+            hp_type=hp_type_chosen,
+            country_name=country_name
+        )
+        # Ako je Srbija, dodajemo i podatke o proizvođaču
+        if country == 'srbija':
+            response_text += manufacturer_details_text
+            # VAŽNO: Dodajemo i kontakt podatke izvođača ovde, jer je hp_offer_info poruka sada opštija
+            response_text += f"\\n\\n{contractor_message_part}" # Dodaj izvođača nakon proizvođača
+            
+    elif context_type == "hp_redirect":
+        response_text = contractor_message_part
+        if country == 'srbija':
+            response_text += manufacturer_details_text
+
+    else: # general_contact
+        response_text = contractor_message_part
+        if country == 'srbija':
+            response_text += manufacturer_details_text
+
+    await context.bot.send_message(chat_id=user_id, text=response_text, parse_mode=ParseMode.MARKDOWN_V2)
+    return ConversationHandler.END
+
 
 # Glavna start funkcija
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -152,6 +227,7 @@ async def language_selection(update: Update, context: ContextTypes.DEFAULT_TYPE)
         ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
+    # Line 315 refers to this message:
     await context.bot.send_message(chat_id=user_id, text=messages["language_selected"], reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN_V2)
     return CHOOSE_INSTALLATION_TYPE
 
@@ -183,7 +259,7 @@ async def country_selection(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     await context.bot.send_message(
         chat_id=user_id,
-        text=messages["country_selected"].format(country_name=country_name) + "\n\n" + messages["main_menu_greeting"],
+        text=messages["country_selected"].format(country_name=country_name) + "\\n\\n" + messages["main_menu_greeting"], # \\n\\n za novi red
         reply_markup=reply_markup,
         parse_mode=ParseMode.MARKDOWN_V2
     )
@@ -207,6 +283,7 @@ async def main_menu_options(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     elif selected_option == 'faq':
         await context.bot.send_message(chat_id=user_id, text="Česta pitanja: Kako odabrati pravu toplotnu pumpu\\? Koja je razlika između split i monoblok sistema\\? Za sve nedoumice, kontaktirajte nas!", parse_mode=ParseMode.MARKDOWN_V2)
     elif selected_option == 'contact':
+        # Line 337 refers to this call:
         return await offer_contact_info(update, context, "general_contact")
     
     return CHOOSE_INSTALLATION_TYPE
@@ -254,15 +331,18 @@ async def installation_type_selection(update: Update, context: ContextTypes.DEFA
         reply_markup = InlineKeyboardMarkup(keyboard)
         await context.bot.send_message(chat_id=user_id, text=messages["choose_heating_system"], reply_markup=reply_markup)
         return CHOOSE_HEATING_SYSTEM
-    elif selected_type == 'hp':
-        country = context.user_data[user_id].get('country', 'srbija')
-        if country == 'crna_gora':
+    elif selected_type == 'hp': # Ako je korisnik odabrao "Toplotne pumpe"
+        country = context.user_data[user_id].get('country', 'srbija') # Proveri koja je država odabrana
+        if country == 'crna_gora': # AKO JE CRNA GORA!
             # Direktno vodi na kontakt info za Crnu Goru (TP ponuda)
             # Podaci su iz contractor dela za Crnu Goru
             cg_contractor = contact_info['crna_gora']['contractor']
-            hp_type_cg = "Toplotna pumpa Vazduh\\-Voda"
-            country_name_cg = messages["crna_gora_button"].replace(" 🇲🇪", "")
+            
+            # Poruka koju prikazujemo (HP tip je fiksiran kao "Vazduh-Voda" za CG)
+            hp_type_cg = "Toplotna pumpa Vazduh\\-Voda" # Escapovano za MarkdownV2
+            country_name_cg = messages["crna_gora_button"].replace(" 🇲🇪", "") # Ime države
 
+            # Formiranje početka poruke koristeći hp_offer_info iz JSON-a
             response_text_cg = messages["hp_offer_info"].format(
                 hp_type=hp_type_cg,
                 country_name=country_name_cg
@@ -271,14 +351,15 @@ async def installation_type_selection(update: Update, context: ContextTypes.DEFA
             response_text_cg += messages["contractor_info"].format(
                 phone=cg_contractor['phone'],
                 email=cg_contractor['email'],
-                website_info=f"\n🌐 *Website:* {cg_contractor['website']}" if cg_contractor.get('website') else "",
-                telegram_info=f"\n💬 *Telegram Podrška:* {cg_contractor['telegram']}" if cg_contractor.get('telegram') else ""
+                website_info=f"\\n🌐 \\*Website\\:* {cg_contractor['website']}" if cg_contractor.get('website') else "",
+                telegram_info=f"\\n💬 \\*Telegram Podrška\\:* {cg_contractor['telegram']}" if cg_contractor.get('telegram') else ""
             )
             
             await context.bot.send_message(chat_id=user_id, text=response_text_cg, parse_mode=ParseMode.MARKDOWN_V2)
-            return ConversationHandler.END
-        else: # Za Srbiju ili druge zemlje, nudimo opcije za tip TP
+            return ConversationHandler.END # ZAVRŠAVA konverzaciju ovde
+        else: # Za Srbiju (ili druge zemlje, ako ih bude), nudimo opcije za tip TP
             return await choose_heat_pump_type(update, context)
+
 
 # Funkcija za odabir tipa toplotne pumpe
 async def choose_heat_pump_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -312,6 +393,7 @@ async def heating_system_selection(update: Update, context: ContextTypes.DEFAULT
 
     if selected_system == 'complete_hp' or selected_system == 'existing':
         await context.bot.send_message(chat_id=user_id, text=messages["redirect_to_hp"], parse_mode=ParseMode.MARKDOWN_V2)
+        # Line 210 refers to this call:
         return await offer_contact_info(update, context, "hp_redirect")
     else:
         keyboard = [
@@ -375,8 +457,8 @@ async def handle_sketch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     # Obaveštenje adminima o primljenoj skici
     user_info = update.effective_user.mention_markdown_v2()
     notification_message = (
-        f"Nova skica primljena od korisnika {user_info} (ID: `{user_id}`)\.\n"
-        f"Tip fajla: *{file_type}*\n"
+        f"Nova skica primljena od korisnika {user_info} (ID: `{user_id}`)\\.\\n" # Dupla kosa crta pre tačke
+        f"Tip fajla: \\*{file_type}\\*\\n" # Dupla kosa crta pre *
         f"ID fajla: `{file_id}`"
     )
     await notify_admins(context, notification_message)
@@ -395,9 +477,11 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         messages = load_messages('en')
 
     error_message_key = "error_occurred"
+    # Proverava specifičnu grešku za "Can't parse entities"
     if isinstance(context.error, Exception) and "Can't parse entities" in str(context.error):
         error_message_key = "session_expired_restart_needed" 
         logger.error(f"Greška prilikom obaveštavanja korisnika o isteku sesije: {context.error}")
+        # Pokušaj da pošalješ poruku bez MarkdownV2 parsiranja kao fallback
         try:
             await context.bot.send_message(chat_id=user_id, text=messages[error_message_key].replace("\\", ""), parse_mode=None)
         except Exception as e:
