@@ -13,34 +13,32 @@ from telegram.ext import (
     filters
 )
 import datetime
-from telegram.constants import ParseMode # Dodato za webhook mode
+from telegram.constants import ParseMode 
+from dotenv import load_dotenv
+
+# Učitavanje environment varijabli sa početka skripte
+load_dotenv()
 
 # Inicijalni print da se potvrdi pokretanje fajla
 print(f"Bot se pokreće sa najnovijim kodom! Vreme pokretanja: {datetime.datetime.now()}")
 
-# Konfiguracija logginga (preporuka za produkciono okruženje)
+# Konfiguracija logginga
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# --- Stanja za ConversationHandler (za prikupljanje skice) ---
+# --- Stanja za ConversationHandler ---
 AWAITING_SKETCH = 1
 
 # --- Podaci za Slanje Emaila i Kontakti ---
-# Tvoj email za slanje poruka i BCC kopije
-# SENDER_EMAIL se preuzima iz environment varijable
 SENDER_EMAIL = os.environ.get('EMAIL_SENDER_EMAIL')
-# SENDER_PASSWORD (App Password) se preuzima iz environment varijable
 SENDER_PASSWORD = os.environ.get('EMAIL_APP_PASSWORD')
-# ADMIN_BCC_EMAIL se preuzima iz environment varijable ili koristi default vrednost
-ADMIN_BCC_EMAIL = os.environ.get('ADMIN_BCC_EMAIL', "banjooo85@gmail.com")
+ADMIN_BCC_EMAIL = os.environ.get('ADMIN_BCC_EMAIL', "banjooo85@gmail.com") # Default vrednost za slučaj da nije postavljeno
 
-# Provera da li su varijable učitane (dobra praksa)
+# Provera da li su varijable učitane
 if not SENDER_EMAIL:
-    logger.error("EMAIL_SENDER_EMAIL environment variable not set.")
-    raise ValueError("EMAIL_SENDER_EMAIL environment variable not set.")
+    logger.critical("EMAIL_SENDER_EMAIL environment variable not set. Bot cannot send emails.")
 if not SENDER_PASSWORD:
-    logger.error("EMAIL_APP_PASSWORD environment variable not set.")
-    raise ValueError("EMAIL_APP_PASSWORD environment variable not set.")
+    logger.critical("EMAIL_APP_PASSWORD environment variable not set. Bot cannot send emails.")
 if not ADMIN_BCC_EMAIL:
     logger.warning("ADMIN_BCC_EMAIL environment variable not set, using default 'banjooo85@gmail.com'.")
 
@@ -50,7 +48,7 @@ CONTRACTOR_SRB_HEATING = {
     "phone": "+381 60 3932566",
     "email": "boskovicigor83@gmail.com",
     "telegram": "@IgorNS1983",
-    "website": None # Nema web sajta
+    "website": None 
 }
 
 # Podaci za Proizvođača Toplotnih Pumpi u Srbiji (Microma)
@@ -68,7 +66,7 @@ CONTRACTOR_MNE_HP = {
     "contact_person": "Ivan Mujović",
     "phone": "+382 67 423 237",
     "email": "office@instalm.me",
-    "website": None, # Nema web sajta
+    "website": None,
     "telegram": "@ivanmujovic"
 }
 
@@ -95,13 +93,13 @@ HEAT_PUMP_OFFERS = {
         "contractor": CONTRACTOR_SRB_HP
     },
     "crna_gora": {
-        "options": ["air_to_water"], # Samo Vazduh-Voda za Crnu Goru
+        "options": ["air_to_water"], 
         "contractor": CONTRACTOR_MNE_HP
     }
 }
 # --- Kraj Podataka o Izvođačima i Email Konfiguracije ---
 
-# Rečnik za čuvanje korisničkih preferencija (jezik, zemlja, tip instalacije, tip grejanja)
+# Rečnik za čuvanje korisničkih preferencija
 user_data = {}
 
 # Funkcija za učitavanje poruka
@@ -114,6 +112,94 @@ def load_messages(lang_code: str):
         logger.error(f"Message file for {effective_lang_code} not found. Defaulting to English.")
         with open(f'messages_en.json', 'r', encoding='utf-8') as f:
             return json.load(f)
+
+# --- Funkcije za slanje emaila ---
+
+async def send_email_with_sketch(recipient: str, subject: str, body: str, file_path: str, installation_type_info: str, telegram_username: str = "N/A") -> None:
+    """
+    Šalje email sa priloženom skicom.
+    Administrator dobija BCC kopiju.
+    """
+    logger.info(f"Pokušavam da pošaljem email sa skicom. Primalac: {recipient}, Tema: {subject}, Fajl: {file_path}")
+    try:
+        if not SENDER_EMAIL or not SENDER_PASSWORD:
+            logger.error("GREŠKA: EMAIL_SENDER_EMAIL ili EMAIL_APP_PASSWORD nisu postavljeni za slanje emaila sa skicom.")
+            return
+
+        logger.debug(f"Pokušavam da se povežem na SMTP server sa: {SENDER_EMAIL}")
+        yag = yagmail.SMTP(user=SENDER_EMAIL, password=SENDER_PASSWORD, host='smtp.gmail.com', port=587, tls=True)
+        logger.info("Uspesno kreiran yagmail SMTP objekat za slanje sa skicom.")
+        
+        full_body = (
+            f"Primljen novi zahtev za ponudu za Grejnu Instalaciju:\n\n"
+            f"Tip izabrane grejne instalacije: {installation_type_info}\n"
+            f"Telegram ID korisnika: {telegram_username}\n\n"
+            f"{body}"
+        )
+
+        contents = [full_body]
+        if file_path and os.path.exists(file_path):
+            contents.append(file_path)
+            logger.info(f"Fajl '{file_path}' uspešno dodan kao prilog za email.")
+        else:
+            logger.warning(f"Fajl '{file_path}' ne postoji ili putanja nije validna. Email će biti poslat bez priloga.")
+
+        yag.send(
+            to=recipient,
+            subject=subject,
+            contents=contents,
+            bcc=ADMIN_BCC_EMAIL
+        )
+        logger.info(f"Email sa skicom uspešno poslat na {recipient} sa BCC na {ADMIN_BCC_EMAIL}.")
+    except yagmail.SMTPAuthenticationError as e:
+        logger.critical(f"GREŠKA U AUTENTIFIKACIJI YAGMAIL-a (sa skicom): {e}")
+        logger.critical("Proverite da li su EMAIL_SENDER_EMAIL i EMAIL_APP_PASSWORD ispravni (koristite 16-cifrenu app lozinku).")
+    except Exception as e:
+        logger.error(f"NEPREDVIĐENA GREŠKA prilikom slanja emaila sa skicom: {e}", exc_info=True)
+    finally:
+        # Obriši preuzeti fajl nakon slanja, bez obzira na uspeh slanja mejla
+        if file_path and os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+                logger.info(f"Obrisan fajl: {file_path}")
+            except OSError as e:
+                logger.error(f"GREŠKA prilikom brisanja fajla {file_path}: {e}")
+
+async def send_email_without_attachment(recipient: str, subject: str, body: str, telegram_username: str = "N/A") -> None:
+    """
+    Šalje email BEZ priloga.
+    Administrator dobija BCC kopiju.
+    """
+    logger.info(f"Pokušavam da pošaljem email BEZ skice. Primalac: {recipient}, Tema: {subject}")
+    try:
+        if not SENDER_EMAIL or not SENDER_PASSWORD:
+            logger.error("GREŠKA: EMAIL_SENDER_EMAIL ili EMAIL_APP_PASSWORD nisu postavljeni za slanje bez priloga.")
+            return
+
+        logger.debug(f"Pokušavam da se povežem na SMTP server (bez priloga) sa: {SENDER_EMAIL}")
+        yag = yagmail.SMTP(user=SENDER_EMAIL, password=SENDER_PASSWORD, host='smtp.gmail.com', port=587, tls=True)
+        logger.info("Uspesno kreiran yagmail SMTP objekat za slanje bez priloga.")
+
+        full_body = (
+            f"Primljen novi zahtev za ponudu:\n\n"
+            f"Telegram ID korisnika: {telegram_username}\n\n"
+            f"{body}"
+        )
+
+        logger.info(f"Šaljem email (bez priloga) na: {recipient}, BCC: {ADMIN_BCC_EMAIL}")
+        yag.send(
+            to=recipient,
+            subject=subject,
+            contents=full_body,
+            bcc=ADMIN_BCC_EMAIL
+        )
+        logger.info(f"Email (bez priloga) uspešno poslat na {recipient} sa BCC na {ADMIN_BCC_EMAIL}.")
+    except yagmail.SMTPAuthenticationError as e:
+        logger.critical(f"GREŠKA U AUTENTIFIKACIJI YAGMAIL-a (bez priloga): {e}")
+        logger.critical("Proverite da li su EMAIL_SENDER_EMAIL i EMAIL_APP_PASSWORD ispravni (koristite 16-cifrenu app lozinku).")
+    except Exception as e:
+        logger.error(f"NEPREDVIĐENA GREŠKA prilikom slanja emaila (bez priloga): {e}", exc_info=True)
+
 
 # --- Handleri za bot ---
 
@@ -183,7 +269,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await show_main_menu(update, context, user_id)
         elif menu_option == 'contact':
             await query.edit_message_text(text=messages["contact_button"] + "...")
-            contractor = CONTRACTOR_SRB_HEATING
+            contractor = CONTRACTOR_SRB_HEATING # Za opštu "Kontakt" opciju, koristimo glavnog izvođača za Srbiju
             
             website_info = f"\nWeb: {contractor['website']}" if contractor['website'] else ""
             telegram_info = f"\nTelegram: {contractor.get('telegram')}" if contractor.get('telegram') else ""
@@ -219,15 +305,15 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             hp_offers_crna_gora_entry = HEAT_PUMP_OFFERS.get('crna_gora', {})
             hp_options_crna_gora = hp_offers_crna_gora_entry.get('options', [])
             logger.debug(f"Korisnik {user_id}: Proveravam uslove za Crnu Goru:")
-            logger.debug(f"    current_country == 'crna_gora': {current_country == 'crna_gora'} (current_country: '{current_country}')")
-            logger.debug(f"    len(hp_options_crna_gora) == 1: {len(hp_options_crna_gora) == 1} (options: {hp_options_crna_gora}, dužina: {len(hp_options_crna_gora)})")
+            logger.debug(f"   current_country == 'crna_gora': {current_country == 'crna_gora'} (current_country: '{current_country}')")
+            logger.debug(f"   len(hp_options_crna_gora) == 1: {len(hp_options_crna_gora) == 1} (options: {hp_options_crna_gora}, dužina: {len(hp_options_crna_gora)})")
             
             if hp_options_crna_gora:
-                logger.debug(f"    hp_options_crna_gora[0] == 'air_to_water': {hp_options_crna_gora[0] == 'air_to_water'}")
+                logger.debug(f"   hp_options_crna_gora[0] == 'air_to_water': {hp_options_crna_gora[0] == 'air_to_water'}")
             else:
-                logger.debug(f"    hp_options_crna_gora je prazna, ne može se proveriti hp_options_crna_gora[0]")
+                logger.debug(f"   hp_options_crna_gora je prazna, ne može se proveriti hp_options_crna_gora[0]")
 
-            # --- LOGIKA ZA CRNU GORU (AUTOMATSKI PRIKAZ PODATAKA) ---
+            # --- LOGIKA ZA CRNU GORU (AUTOMATSKI PRIKAZ PODATAKA I SLANJE EMAILA) ---
             if current_country == 'crna_gora' and \
                len(hp_options_crna_gora) == 1 and \
                hp_options_crna_gora[0] == 'air_to_water':
@@ -246,6 +332,22 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 chosen_hp_name = chosen_hp_name_dict.get('air_to_water', 'Vazduh-Voda Toplotna Pumpa')
                 country_display_name = messages.get(f"{current_country}_name", current_country.capitalize())
                 website_info = f"\nWeb: {contractor['website']}" if contractor['website'] else ""
+                telegram_username = update.effective_user.username if update.effective_user.username else 'N/A'
+
+                # Slanje emaila izvođaču za TP u Crnoj Gori
+                subject = f"Novi zahtev za ponudu: Toplotna Pumpa ({chosen_hp_name}) od korisnika {user_id}"
+                body_email = (
+                    f"Korisnik je izabrao toplotnu pumpu tipa: {chosen_hp_name} u zemlji: {country_display_name}.\n"
+                    f"ID korisnika: {user_id}\n"
+                    f"Ime: {update.effective_user.full_name}\n"
+                    f"Username: @{telegram_username}"
+                )
+                await send_email_without_attachment(
+                    recipient=contractor['email'],
+                    subject=subject,
+                    body=body_email,
+                    telegram_username=telegram_username
+                )
                 
                 logger.debug(f"Korisnik {user_id}: Priprema se poruka sa podacima Instal M.")
                 try:
@@ -281,6 +383,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         logger.debug(f"Tip grejnog sistema odabran: {heating_system_type}. user_data[{user_id}]: {user_data[user_id]}")
 
         response_text = ""
+        # Dobićemo ime grejnog sistema na izabranom jeziku
         if heating_system_type == 'radiators':
             response_text = messages["radiators_button"]
         elif heating_system_type == 'fan_coil':
@@ -292,32 +395,87 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         elif heating_system_type == 'complete_hp':
             response_text = messages["complete_with_hp_button"]
             user_data[user_id]['installation_type'] = 'heatpump_and_heating'
+            # Za 'complete_hp', već je cela logika obrađena gore, samo potvrdjujemo izbor
             await query.edit_message_text(text=f"{response_text} je izabrana. ") 
-
-            # OVDE JE IZMENA: Sada koristi CONTRACTOR_SRB_HEATING za "Komplet sa toplotnom pumpom"
-            contractor = CONTRACTOR_SRB_HEATING 
             
-            website_info = f"\nWeb: {contractor['website']}" if contractor['website'] else ""
+            # Email i kontakt za "Komplet sa toplotnom pumpom"
+            contractor = CONTRACTOR_SRB_HEATING # Koristi izvođača za grejanje
+            contractor_email_target = contractor["email"]
+            telegram_username = update.effective_user.username if update.effective_user.username else 'N/A'
+            
+            subject = f"Novi zahtev: {response_text} od korisnika {user_id}"
+            body_email = (
+                f"Korisnik je izabrao opciju: {response_text}.\n"
+                f"ID korisnika: {user_id}\n"
+                f"Ime: {update.effective_user.full_name}\n"
+                f"Username: @{telegram_username}"
+            )
+            
+            await send_email_without_attachment(
+                recipient=contractor_email_target,
+                subject=subject,
+                body=body_email,
+                telegram_username=telegram_username
+            )
 
-            contact_info_text = messages["hp_offer_info"].format(
-                hp_type=messages["complete_with_hp_button"], 
-                country_name=messages["srbija_name"],
+            website_info = f"\nWeb: {contractor['website']}" if contractor['website'] else ""
+            telegram_info = f"\nTelegram: {contractor.get('telegram')}" if contractor.get('telegram') else ""
+            
+            contact_info_text = messages["contractor_info"].format( # Koristimo contractor_info jer je to izvođač za grejanje
                 phone=contractor['phone'],
                 email=contractor['email'],
-                website_info=website_info
+                website_info=website_info,
+                telegram_info=telegram_info
             )
             await query.message.reply_text(contact_info_text)
             await show_main_menu(update, context, user_id)
             return
-            
+
         elif heating_system_type == 'existing_heating':
             await query.edit_message_text(text=messages["existing_installation_button"] + " je izabrana.")
             await query.message.reply_text(messages["redirect_to_hp"])
             await show_main_menu(update, context, user_id)
             return
 
+        # Slanje poruke o izboru tipa grejanja
         await query.edit_message_text(text=f"{response_text} je izabrana.")
-        
+
+        # --- NOVI DEO KODA ZA Slanje Emaila i Prikaz Izvođača (za sve osim 'complete_hp' i 'existing_heating') ---
+        # Email se šalje samo za "Grejne Instalacije"
+        if user_data[user_id].get('installation_type') == 'heating': 
+            contractor = CONTRACTOR_SRB_HEATING
+            contractor_email_target = contractor["email"]
+            telegram_username = update.effective_user.username if update.effective_user.username else 'N/A'
+            
+            subject = f"Novi zahtev: Grejna instalacija ({response_text}) od korisnika {user_id}"
+            body_email = (
+                f"Korisnik je izabrao tip grejne instalacije: {response_text}.\n"
+                f"ID korisnika: {user_id}\n"
+                f"Ime: {update.effective_user.full_name}\n"
+                f"Username: @{telegram_username}"
+            )
+            
+            await send_email_without_attachment(
+                recipient=contractor_email_target,
+                subject=subject,
+                body=body_email,
+                telegram_username=telegram_username
+            )
+
+            # Prikaz podataka izvođača odmah
+            website_info = f"\nWeb: {contractor['website']}" if contractor['website'] else ""
+            telegram_info = f"\nTelegram: {contractor.get('telegram')}" if contractor.get('telegram') else ""
+
+            contact_info_text = messages["contractor_info"].format(
+                phone=contractor['phone'],
+                email=contractor['email'],
+                website_info=website_info,
+                telegram_info=telegram_info
+            )
+            await query.message.reply_text(contact_info_text)
+
+        # --- KRAJ NOVOG DEO KODA ---
+
         keyboard = [[InlineKeyboardButton(messages["send_sketch_button"], callback_data='send_sketch_now')]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.message.reply_text(messages["request_sketch"], reply_markup=reply_markup)
@@ -331,7 +489,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         current_country = user_data[user_id]['country']
         messages = load_messages(current_lang)
         logger.debug(f"Tip toplotne pumpe odabran: {hp_type_chosen}. user_data[{user_id}]: {user_data[user_id]}")
-
 
         country_data = HEAT_PUMP_OFFERS.get(current_country)
         if not country_data:
@@ -354,7 +511,23 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         country_display_name = messages.get(country_name_key, current_country.capitalize())
 
         website_info = f"\nWeb: {contractor['website']}" if contractor['website'] else ""
-        
+        telegram_username = update.effective_user.username if update.effective_user.username else 'N/A'
+
+        # Slanje emaila izvođaču za Toplotne Pumpe
+        subject = f"Novi zahtev za ponudu: Toplotna Pumpa ({chosen_hp_name}) od korisnika {user_id}"
+        body_email = (
+            f"Korisnik je izabrao toplotnu pumpu tipa: {chosen_hp_name} u zemlji: {country_display_name}.\n"
+            f"ID korisnika: {user_id}\n"
+            f"Ime: {update.effective_user.full_name}\n"
+            f"Username: @{telegram_username}"
+        )
+        await send_email_without_attachment(
+            recipient=contractor['email'],
+            subject=subject,
+            body=body_email,
+            telegram_username=telegram_username
+        )
+
         await query.edit_message_text(
             text=messages["hp_offer_info"].format(
                 hp_type=chosen_hp_name,
@@ -431,10 +604,8 @@ async def show_heat_pump_options(update: Update, context: ContextTypes.DEFAULT_T
     
     keyboard = []
     
-    # Dobavi dostupne opcije toplotnih pumpi za izabranu zemlju
     hp_options = HEAT_PUMP_OFFERS.get(current_country, {}).get("options", [])
     
-    # Dobavi odgovarajuci recnik za nazive toplotnih pumpi
     hp_names_dict = {}
     if current_lang == 'sr':
         hp_names_dict = HEAT_PUMP_TYPES_SR
@@ -444,48 +615,12 @@ async def show_heat_pump_options(update: Update, context: ContextTypes.DEFAULT_T
         hp_names_dict = HEAT_PUMP_TYPES_RU
 
     for hp_type_key in hp_options:
-        button_text = hp_names_dict.get(hp_type_key, hp_type_key) # Dohvati naziv na izabranom jeziku
+        button_text = hp_names_dict.get(hp_type_key, hp_type_key) 
         keyboard.append([InlineKeyboardButton(button_text, callback_data=f'hp_type_{hp_type_key}')])
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     await context.bot.send_message(chat_id=user_id, text=messages["choose_heat_pump_type"], reply_markup=reply_markup)
 
-
-# --- Funkcije za slanje emaila ---
-
-async def send_email_with_sketch(recipient: str, subject: str, body: str, file_path: str, installation_type_info: str, telegram_username: str = "N/A") -> None:
-    """
-    Šalje email sa priloženom skicom.
-    Administrator dobija BCC kopiju.
-    """
-    try:
-        yag = yagmail.SMTP(SENDER_EMAIL, SENDER_PASSWORD)
-        
-        full_body = (
-            f"Primljen novi zahtev za ponudu za Grejnu Instalaciju:\n\n"
-            f"Tip izabrane grejne instalacije: {installation_type_info}\n"
-            f"Telegram ID korisnika: {telegram_username}\n\n"
-            f"{body}"
-        )
-
-        yag.send(
-            to=recipient,
-            subject=subject,
-            contents=full_body,
-            attachments=file_path,
-            bcc=ADMIN_BCC_EMAIL
-        )
-        logger.info(f"Email uspešno poslat na {recipient} sa BCC na {ADMIN_BCC_EMAIL}.")
-    except Exception as e:
-        logger.error(f"GREŠKA prilikom slanja emaila: {e}")
-    finally:
-        # Obriši preuzeti fajl nakon slanja, bez obzira na uspeh slanja mejla
-        if os.path.exists(file_path):
-            try:
-                os.remove(file_path)
-                logger.info(f"Obrisan fajl: {file_path}")
-            except OSError as e:
-                logger.error(f"GREŠKA prilikom brisanja fajla {file_path}: {e}")
 
 # --- Handleri za ConversationHandler (prikupljanje skice) ---
 
@@ -515,7 +650,7 @@ async def handle_sketch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         file_id = update.message.document.file_id
         file_name = update.message.document.file_name
     elif update.message.photo:
-        file_id = update.message.photo[-1].file_id # Uzmi najveću rezoluciju fotografije
+        file_id = update.message.photo[-1].file_id 
         if update.message.photo[-1].file_unique_id:
              file_name = f"sketch_{update.message.photo[-1].file_unique_id}.jpg"
         else:
@@ -525,9 +660,9 @@ async def handle_sketch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         return AWAITING_SKETCH # Ostani u istom stanju
 
     file_telegram = await context.bot.get_file(file_id)
-    download_path = os.path.join("/tmp", file_name) # Izmena za Render/Linux okruženja
+    download_path = os.path.join("/tmp", file_name) 
 
-    os.makedirs("/tmp", exist_ok=True) # Kreiraj /tmp ako ne postoji
+    os.makedirs("/tmp", exist_ok=True) 
 
     await file_telegram.download_to_drive(download_path)
     logger.info(f"Fajl preuzet: {download_path}")
@@ -536,17 +671,8 @@ async def handle_sketch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     
     selected_heating_system = user_data[user_id].get('heating_system_type', 'N/A')
     messages_for_type = load_messages(user_data[user_id]['lang'])
-    if selected_heating_system == 'radiators':
-        installation_type_info = messages_for_type["radiators_button"]
-    elif selected_heating_system == 'fan_coil':
-        installation_type_info = messages_for_type["fan_coil_button"]
-    elif selected_heating_system == 'underfloor':
-        installation_type_info = messages_for_type["underfloor_heating_button"]
-    elif selected_heating_system == 'underfloor_fan_coil':
-        installation_type_info = messages_for_type["underfloor_fan_coil_button"]
-    else:
-        installation_type_info = "N/A"
-
+    installation_type_info = messages_for_type.get(f"{selected_heating_system}_button", selected_heating_system) 
+    
     body = f"Korisnik je poslao skicu za grejnu instalaciju." \
            f"\nID korisnika: {user_id}" \
            f"\nIme: {update.effective_user.full_name}" \
@@ -565,6 +691,7 @@ async def handle_sketch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 
     await update.message.reply_text(messages["sketch_received"])
     
+    # Podaci izvođača se prikazuju ponovo nakon slanja skice
     contractor = CONTRACTOR_SRB_HEATING
     
     website_info = f"\nWeb: {contractor['website']}" if contractor['website'] else ""
@@ -602,10 +729,8 @@ def main() -> None:
         logger.critical("TELEGRAM_BOT_TOKEN environment variable not set. Bot cannot start.")
         raise ValueError("TELEGRAM_BOT_TOKEN environment variable not set.")
     
-    # --- IZMENE OVDE: Za Webhook deployment na Renderu ---
-    PORT = int(os.environ.get('PORT', 8080)) # Render će automatski postaviti ovu varijablu
-    WEBHOOK_URL = os.environ.get('WEBHOOK_URL') # Ovo moraš ručno postaviti na Renderu
-    # --- KRAJ IZMENA ---
+    PORT = int(os.environ.get('PORT', 8080)) 
+    WEBHOOK_URL = os.environ.get('WEBHOOK_URL') 
 
     application = Application.builder().token(TOKEN).build() 
 
@@ -624,19 +749,17 @@ def main() -> None:
     )
     application.add_handler(sketch_conversation_handler) 
 
-    # --- IZMENE OVDE: Uslovno pokretanje Webhook ili Polling moda ---
     if WEBHOOK_URL:
         logger.info(f"Pokrećem bot u webhook modu. URL: {WEBHOOK_URL}, Port: {PORT}")
         application.run_webhook(
-            listen="0.0.0.0",  # Slušaj na svim interfejsima
-            port=PORT,         # Koristi port koji Render dodeli
-            url_path=TOKEN,    # Putanja u URL-u za sigurnost
-            webhook_url=f"{WEBHOOK_URL}/{TOKEN}" # Kompletan URL za Telegram API
+            listen="0.0.0.0",   
+            port=PORT,         
+            url_path=TOKEN,    
+            webhook_url=f"{WEBHOOK_URL}/{TOKEN}" 
         )
     else:
         logger.info("WEBHOOK_URL nije postavljen. Pokrećem bot u polling modu (za lokalni razvoj).")
         application.run_polling(allowed_updates=Update.ALL_TYPES)
-    # --- KRAJ IZMENA ---
 
 if __name__ == "__main__":
     main()
