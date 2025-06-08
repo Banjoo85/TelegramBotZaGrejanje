@@ -31,5 +31,6 @@
     "send_sketch_button": "Pošalji skicu",
     "no_sketch_button": "Ne želim da pošaljem skicu",         
     "request_sketch_optional": "Želite li da pošaljete skicu objekta sa dimenzijama (tlocrt/osnova) za precizniju ponudu? To je opciono.",
-    "no_sketch_confirmation": "Razumem, skica nije poslata. Vraćam vas na glavni meni."
+    "no_sketch_confirmation": "Razumem, skica nije poslata. Vraćam vas na glavni meni.",
+    "session_expired_restart_needed": "Vaša sesija je istekla ili je bot restartovan. Molimo, kucajte /start da počnete iznova."
 }

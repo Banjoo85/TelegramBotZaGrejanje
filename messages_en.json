@@ -2,7 +2,7 @@
     "start_message": "Welcome! I am your assistant for heat pumps and heating installations. Please choose a language:",
     "language_selected": "Language set to English. Welcome!",
     "choose_country": "Please choose the country you are interested in:",
-    "country_selected": "You have chosen: {country_name}. Thank Thank you!",
+    "country_selected": "You have chosen: {country_name}. Thank you!",
     "srbija_button": "Serbia 🇷🇸",
     "srbija_name": "Serbia",
     "crna_gora_button": "Montenegro 🇲🇪",
@@ -31,5 +31,6 @@
     "send_sketch_button": "Send Sketch",
     "no_sketch_button": "I don't want to send a sketch",       
     "request_sketch_optional": "Would you like to send a sketch of the building with dimensions (floor plan/layout) for a more precise quote? This is optional.",
-    "no_sketch_confirmation": "Understood, no sketch sent. Returning to the main menu."
+    "no_sketch_confirmation": "Understood, no sketch sent. Returning to the main menu.",
+    "session_expired_restart_needed": "Your session has expired or the bot has been restarted. Please type /start to begin again."
 }
