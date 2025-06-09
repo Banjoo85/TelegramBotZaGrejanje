@@ -103,7 +103,7 @@ async def show_srbija_heating_menu(update: Update, context: ContextTypes.DEFAULT
         [InlineKeyboardButton(messages["complete_heat_pump_offer_button"], callback_data='system_srb_complete_hp')],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await context.bot.send_message(chat_id=user_id, text=messages["choose_heating_system"], reply_markup=reply_markup)
+    await context.bot.send_message(chat_id=user_id, text=messages["choose_installation_type"], reply_markup=reply_markup)
 
 async def show_srbija_heat_pump_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int) -> None:
     messages = load_messages(user_data[user_id]['lang'])
