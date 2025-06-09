@@ -6,14 +6,14 @@ import asyncio # asyncio je potreban za async funkcije
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
-    ApplicationBuilder, # Potrebno za ApplicationBuilder
+    ApplicationBuilder,
     CommandHandler,
     CallbackQueryHandler,
     MessageHandler,
     filters,
     ContextTypes,
     ConversationHandler,
-    PicklePersistence # Potrebno za perzistenciju
+    PicklePersistence
 )
 from telegram.constants import ParseMode
 
@@ -119,7 +119,7 @@ async def handle_invalid_input(update: Update, context: ContextTypes.DEFAULT_TYP
     user_id = update.effective_user.id
     messages = context.user_data.get(user_id, {}).get('messages', load_messages('en'))
     
-    current_state = await context.bot.get_state(user_id, 'main_conversation') # OVO JE KRITIČNO: Proveriti da li je 'main_conversation' ime tvog ConversationHandler-a
+    current_state = context.bot.get_handler_by_name("main_conversation").states[update.effective_chat.id] # Ispravljen pristup stanju
 
     if current_state == UPLOAD_SKETCH:
         await update.message.reply_text(messages["request_sketch"], parse_mode=ParseMode.MARKDOWN_V2)
@@ -130,26 +130,34 @@ async def handle_invalid_input(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def handle_session_expired(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Obrađuje istek sesije ili iznenadno stanje."""
-    user_id = update.effective_user.id
+    user_id = None
+    if update and update.effective_user: # Dodata provera za update i effective_user
+        user_id = update.effective_user.id
     
     # Ako korisnik nema sesiju ili je sesija neaktivna
-    if user_id not in context.user_data or not context.user_data[user_id].get('session_active'):
+    if user_id is None or user_id not in context.user_data or not context.user_data[user_id].get('session_active'):
         logger.warning(f"Sesija istekla za korisnika {user_id} tokom callback upita. Pokušavam da oporavim.")
         # Inicijalizacija sesije ako je istekla
-        context.user_data[user_id] = {'lang': 'en', 'session_active': True}
-        context.user_data[user_id]['messages'] = load_messages('en')
-        messages = context.user_data[user_id]['messages']
+        if user_id: # Inicijalizuj samo ako imamo user_id
+            context.user_data[user_id] = {'lang': 'en', 'session_active': True}
+            context.user_data[user_id]['messages'] = load_messages('en')
+            messages = context.user_data[user_id]['messages']
+        else: # Ako nema user_id, koristimo generičke poruke
+            messages = load_messages('en')
         
         # Pokušaj da odgovoriš korisniku na odgovarajući način
-        if update.callback_query:
+        if update and update.callback_query: # Dodata provera za update
             await update.callback_query.answer()
             await update.callback_query.edit_message_reply_markup(reply_markup=None)
-            await context.bot.send_message(chat_id=user_id, text=messages["session_expired_restart_needed"], parse_mode=ParseMode.MARKDOWN_V2)
-        elif update.message:
-            await context.bot.send_message(chat_id=user_id, text=messages["session_expired_restart_needed"], parse_mode=ParseMode.MARKDOWN_V2)
+            await context.bot.send_message(chat_id=update.effective_chat.id, text=messages["session_expired_restart_needed"], parse_mode=ParseMode.MARKDOWN_V2)
+        elif update and update.message: # Dodata provera za update
+            await context.bot.send_message(chat_id=update.effective_chat.id, text=messages["session_expired_restart_needed"], parse_mode=ParseMode.MARKDOWN_V2)
+        else: # Fallback za slučaj da nema ni callback_query ni message
+             logger.error("handle_session_expired pozvan bez update.callback_query ili update.message")
+             return ConversationHandler.END # Ne možemo ništa poslati bez chat_id
             
-        # Vraćanje na početak konverzacije
-        await start(update, context)
+        if user_id: # Pozovi start samo ako imamo validan user_id
+            await start(update, context)
         return ConversationHandler.END
     
     # Ako sesija postoji, ali je samo nevalidan unos
@@ -510,7 +518,9 @@ async def handle_sketch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 # Funkcija za obradu grešaka
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.error(f"Update {update} prouzrokovao grešku {context.error}")
-    user_id = update.effective_user.id if update.effective_user else None
+    
+    # Dodata provera da update nije None pre nego što se pokuša pristup effective_user
+    user_id = update.effective_user.id if update and update.effective_user else None
     
     messages = {}
     if user_id and user_id in context.user_data and 'messages' in context.user_data[user_id]:
@@ -524,20 +534,42 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         error_message_key = "session_expired_restart_needed" 
         logger.error(f"Greška prilikom obaveštavanja korisnika o isteku sesije: {context.error}")
         # Pokušaj da pošalješ poruku bez MarkdownV2 parsiranja kao fallback
-        try:
-            await context.bot.send_message(chat_id=user_id, text=messages[error_message_key].replace("\\", ""), parse_mode=None)
-        except Exception as e:
-            logger.error(f"Sekundarna greška prilikom slanja fallback poruke: {e}")
-            await context.bot.send_message(chat_id=user_id, text="Došlo je do greške u sesiji\\. Molimo kucajte /start da biste počeli ispočetka\\.", parse_mode=ParseMode.MARKDOWN_V2)
+        if user_id: # Pošalji poruku samo ako postoji user_id
+            try:
+                await context.bot.send_message(chat_id=user_id, text=messages[error_message_key].replace("\\", ""), parse_mode=None)
+            except Exception as e:
+                logger.error(f"Sekundarna greška prilikom slanja fallback poruke: {e}")
+                await context.bot.send_message(chat_id=user_id, text="Došlo je do greške u sesiji\\. Molimo kucajte /start da biste počeli ispočetka\\.", parse_mode=ParseMode.MARKDOWN_V2)
+        else: # Ako nema user_id, samo loguj
+            logger.error(f"Nije moguće poslati poruku greške jer user_id nije dostupan. Originalna greška: {context.error}")
     else:
-        await context.bot.send_message(chat_id=user_id, text=messages[error_message_key], parse_mode=ParseMode.MARKDOWN_V2)
+        if user_id: # Pošalji poruku samo ako postoji user_id
+            await context.bot.send_message(chat_id=user_id, text=messages[error_message_key], parse_mode=ParseMode.MARKDOWN_V2)
+        else: # Ako nema user_id, samo loguj
+            logger.error(f"Nije moguće poslati poruku greške jer user_id nije dostupan. Originalna greška: {context.error}")
+
+# Funkcija za brisanje webhooka
+async def delete_telegram_webhook(bot_token: str) -> None:
+    """Pokušava da obriše postojeći Telegram webhook."""
+    # Koristimo httpx za direktan HTTP poziv jer telegram.ext nema jednostavnu metodu za to izvan aplikacije
+    import httpx
+    url = f"https://api.telegram.org/bot{bot_token}/deleteWebhook"
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(url)
+            response.raise_for_status()  # Podiže HTTPStatusError za 4xx/5xx odgovore
+            logger.info(f"Uspešno obrisan webhook: {response.json()}")
+    except httpx.HTTPStatusError as e:
+        logger.warning(f"Greška prilikom brisanja webhooka (verovatno ga nema): {e.response.json()}")
+    except httpx.RequestError as e:
+        logger.error(f"Mrežna greška prilikom brisanja webhooka: {e}")
 
 # Glavna funkcija za pokretanje bota
 def main() -> None:
     # Inicijalizacija PicklePersistence mora biti unutar main() funkcije
     persistence = PicklePersistence(filepath="my_bot_data.pkl")
 
-    # Inicijalizacija ApplicationBuilder: Korišćenje direktnog konstruktora
+    # Inicijalizacija ApplicationBuilder: Korišćenje builder patterna
     application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).persistence(persistence).build()
 
     # ConversationHandler mora biti definisan NAKON svih funkcija koje koristi
@@ -559,7 +591,7 @@ def main() -> None:
             UPLOAD_SKETCH: [
                 CallbackQueryHandler(sketch_option, pattern='^sketch_'),
                 MessageHandler(filters.PHOTO | filters.Document.ALL, handle_sketch),
-                CommandHandler('cancel', end_conversation) # Funkcija end_conversation se poziva ovde
+                CommandHandler('cancel', end_conversation)
             ],
             CHOOSE_HEAT_PUMP_TYPE: [
                 CallbackQueryHandler(heat_pump_type_selected, pattern='^hp_')
@@ -567,8 +599,8 @@ def main() -> None:
         },
         fallbacks=[
             CommandHandler('start', start),
-            CallbackQueryHandler(handle_session_expired), # Funkcija handle_session_expired se poziva ovde
-            MessageHandler(filters.TEXT & ~filters.COMMAND, handle_invalid_input) # Funkcija handle_invalid_input se poziva ovde
+            CallbackQueryHandler(handle_session_expired),
+            MessageHandler(filters.TEXT & ~filters.COMMAND, handle_invalid_input)
         ],
         persistent=True,
         name="main_conversation"
@@ -579,6 +611,9 @@ def main() -> None:
 
     if not IS_LOCAL:
         logger.info(f"Pokrećem webhook na portu {PORT}")
+        # Važno: Obriši sve postojeće webhookove pre postavljanja novog
+        asyncio.run(delete_telegram_webhook(TELEGRAM_BOT_TOKEN)) 
+        
         application.run_webhook(
             listen="0.0.0.0",
             port=PORT,
@@ -587,6 +622,8 @@ def main() -> None:
         )
     else:
         logger.info("Pokrećem polling (lokalno)")
+        # Ako pokrećeš polling, takođe obriši webhook da bi izbegao konflikt
+        asyncio.run(delete_telegram_webhook(TELEGRAM_BOT_TOKEN)) # Dodata linija i ovde
         application.run_polling(poll_interval=3)
 
 # Obezbeđujemo da se main() poziva samo kada se skripta pokreće direktno
