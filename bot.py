@@ -1,631 +1,602 @@
-import os
-import json
 import logging
-import asyncio # asyncio je potreban za async funkcije
+import json
+import os
+import re # Dodato za validaciju emaila i telefona
+import yagmail # Dodato za slanje emailova
+from dotenv import load_dotenv # Dodato za učitavanje .env fajla lokalno
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
     Application,
-    ApplicationBuilder,
     CommandHandler,
     CallbackQueryHandler,
-    MessageHandler,
-    filters,
     ContextTypes,
     ConversationHandler,
-    PicklePersistence
+    MessageHandler,
+    filters
 )
-from telegram.constants import ParseMode
 
-# Konfiguracija logovanja
+# Učitavanje .env fajla za lokalni razvoj (Render automatski radi isto)
+load_dotenv()
+
+# Postavljanje logginga
 logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.DEBUG
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
 # Stanja za ConversationHandler
-CHOOSE_INSTALLATION_TYPE, CHOOSE_HEATING_SYSTEM, UPLOAD_SKETCH, CHOOSE_HEAT_PUMP_TYPE = range(4)
+CHOOSE_OBJECT_TYPE, ENTER_SURFACE_AREA, ENTER_NUM_FLOORS, SEND_SKETCH, ENTER_CONTACT_INFO, ENTER_EMAIL, CONFIRM_DETAILS = range(7)
 
-# --- PODACI ZA KONTAKT I ADMINI ---
-# --- PODACI ZA KONTAKT I ADMINI ---
-# Podaci za kontakt
-contact_info = {
-    'srbija': {
-        # Podaci za IZVOĐAČA RADOVA u Srbiji
-        'contractor': {
-            'phone': '+381603932566',        # Telefon izvođača za Srbiju
-            'email': 'boskovicigor83@gmail.com', # Email izvođača za Srbiju
-            'website': ':',   # Website izvođača za Srbiju (ako postoji)
-            'telegram': '@IgorNS1983' # Telegram izvođača za Srbiju (ako postoji)
-        },
-        # Podaci za PROIZVOĐAČA u Srbiji
-        'manufacturer': {
-            'name': 'Microma',           # Naziv proizvođača
-            'phone': '+38163582068',        # Telefon proizvođača (RAZLIČIT)
-            'email': 'office@microma.rs', # Email proizvođača (RAZLIČIT)
-            'website': 'https://microma.rs', # Website proizvođača (RAZLIČIT)
-            'telegram': ':'  # Telegram proizvođača (ako postoji)
-        }
-    },
-    'crna_gora': {
-        # Podaci za IZVOĐAČA RADOVA u Crnoj Gori (nema posebnog proizvođača ovde, samo izvođač)
-        'contractor': {
-            'name': 'Instal M',
-            'phone': '+38267423237',
-            'email': 'office@instalm.me',
-            'website': ':',
-            'telegram': '@ivanmujovic'
-        }
-    }
-}
-
-# Telegram ID-ovi admina koji će primati obaveštenja (TVOJ ID TREBA DA BUDE OVDE)
-ADMIN_IDS = [
-    6869162490, # ZAMENI OVO SA SVOJIM TELEGRAM ID-jem (ADMIN ID 1)
-]
-# --- KRAJ SEKCIJE PODATAKA ---
-
-# Učitavanje tokena i webhook URL-a
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")
-IS_LOCAL = os.getenv("IS_LOCAL", "True").lower() == "true"
-PORT = int(os.environ.get("PORT", 8443))
+# Rečnik za čuvanje korisničkih preferencija i podataka za upit
+user_data = {} # U produkciji bi ovo trebalo da bude baza podataka
 
 # Funkcija za učitavanje poruka
-def load_messages(lang: str) -> dict:
+def load_messages(lang_code):
     try:
-        with open(f'messages_{lang}.json', 'r', encoding='utf-8') as f:
-            messages = json.load(f)
-        logger.debug(f"Uspešno učitane poruke iz messages_{lang}.json")
-        return messages
+        with open(f'messages_{lang_code}.json', 'r', encoding='utf-8') as f:
+            return json.load(f)
     except FileNotFoundError:
-        logger.error(f"Fajl messages_{lang}.json nije pronađen. Vraćam podrazumevane engleske poruke.")
-        with open('messages_en.json', 'r', encoding='utf-8') as f:
-            messages = json.load(f)
-        return messages
-    except json.JSONDecodeError as e:
-        logger.error(f"Greška prilikom parsiranja JSON fajla messages_{lang}.json: {e}. Vraćam podrazumevane engleske poruke.")
-        with open('messages_en.json', 'r', encoding='utf-8') as f:
-            messages = json.load(f)
-        return messages
+        logger.error(f"Message file for {lang_code} not found. Defaulting to English.")
+        with open(f'messages_en.json', 'r', encoding='utf-8') as f:
+            return json.load(f)
 
-# Pomoćna funkcija za dobijanje poruke na osnovu korisničkog jezika
-def get_message(user_id: int, key: str, user_data: dict) -> str:
-    lang = user_data.get(user_id, {}).get('lang', 'en')
-    messages = user_data.get(user_id, {}).get('messages', load_messages('en'))
-    return messages.get(key, f"_{key}_ missing in messages. Defaulting to English.")
+# --- Handleri i pomoćne funkcije ---
 
-# Funkcija za slanje obaveštenja adminima
-async def notify_admins(context: ContextTypes.DEFAULT_TYPE, message: str) -> None:
-    for admin_id in ADMIN_IDS:
-        try:
-            await context.bot.send_message(chat_id=admin_id, text=message, parse_mode=ParseMode.MARKDOWN_V2)
-            logger.info(f"Obaveštenje poslato adminu {admin_id}")
-        except Exception as e:
-            logger.error(f"Greška prilikom slanja obaveštenja adminu {admin_id}: {e}")
-
-# --- POMOĆNE FUNKCIJE ZA RAZGOVOR (DEFINISANE PRE UPOTREBE) ---
-
-async def end_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Završava konverzaciju i šalje poruku o završetku."""
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
-    messages = context.user_data.get(user_id, {}).get('messages', load_messages('en'))
-    await update.message.reply_text(messages.get("conversation_ended", "Konverzacija je završena\\. Kucajte /start za ponovni početak\\."), parse_mode=ParseMode.MARKDOWN_V2)
-    return ConversationHandler.END
+    user_data[user_id] = {'lang': 'en'} # Podrazumevani jezik dok korisnik ne izabere
 
-async def handle_invalid_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Obrađuje nevalidan tekstualni unos u toku konverzacije."""
-    user_id = update.effective_user.id
-    messages = context.user_data.get(user_id, {}).get('messages', load_messages('en'))
-    
-    current_state = context.bot.get_handler_by_name("main_conversation").states[update.effective_chat.id] # Ispravljen pristup stanju
-
-    if current_state == UPLOAD_SKETCH:
-        await update.message.reply_text(messages["request_sketch"], parse_mode=ParseMode.MARKDOWN_V2)
-        return UPLOAD_SKETCH
-    else:
-        await update.message.reply_text(messages["error_displaying_menu"], parse_mode=ParseMode.MARKDOWN_V2)
-        return ConversationHandler.END
-
-async def handle_session_expired(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Obrađuje istek sesije ili iznenadno stanje."""
-    user_id = None
-    if update and update.effective_user: # Dodata provera za update i effective_user
-        user_id = update.effective_user.id
-    
-    # Ako korisnik nema sesiju ili je sesija neaktivna
-    if user_id is None or user_id not in context.user_data or not context.user_data[user_id].get('session_active'):
-        logger.warning(f"Sesija istekla za korisnika {user_id} tokom callback upita. Pokušavam da oporavim.")
-        # Inicijalizacija sesije ako je istekla
-        if user_id: # Inicijalizuj samo ako imamo user_id
-            context.user_data[user_id] = {'lang': 'en', 'session_active': True}
-            context.user_data[user_id]['messages'] = load_messages('en')
-            messages = context.user_data[user_id]['messages']
-        else: # Ako nema user_id, koristimo generičke poruke
-            messages = load_messages('en')
-        
-        # Pokušaj da odgovoriš korisniku na odgovarajući način
-        if update and update.callback_query: # Dodata provera za update
-            await update.callback_query.answer()
-            await update.callback_query.edit_message_reply_markup(reply_markup=None)
-            await context.bot.send_message(chat_id=update.effective_chat.id, text=messages["session_expired_restart_needed"], parse_mode=ParseMode.MARKDOWN_V2)
-        elif update and update.message: # Dodata provera za update
-            await context.bot.send_message(chat_id=update.effective_chat.id, text=messages["session_expired_restart_needed"], parse_mode=ParseMode.MARKDOWN_V2)
-        else: # Fallback za slučaj da nema ni callback_query ni message
-             logger.error("handle_session_expired pozvan bez update.callback_query ili update.message")
-             return ConversationHandler.END # Ne možemo ništa poslati bez chat_id
-            
-        if user_id: # Pozovi start samo ako imamo validan user_id
-            await start(update, context)
-        return ConversationHandler.END
-    
-    # Ako sesija postoji, ali je samo nevalidan unos
-    messages = context.user_data[user_id]['messages']
-    await context.bot.send_message(chat_id=user_id, text=messages["error_displaying_menu"], parse_mode=ParseMode.MARKDOWN_V2)
-    return ConversationHandler.END
-
-
-# Funkcija za pružanje kontakt informacija
-async def offer_contact_info(update: Update, context: ContextTypes.DEFAULT_TYPE, context_type: str) -> int:
-    user_id = update.effective_user.id
-    messages = context.user_data[user_id]['messages']
-    
-    country = context.user_data[user_id].get('country', 'srbija') # Default na Srbiju
-    
-    # Uzimanje podataka za IZVOĐAČA na osnovu zemlje
-    contractor_contacts = contact_info.get(country, {}).get('contractor')
-    if not contractor_contacts:
-        contractor_contacts = contact_info['srbija']['contractor']
-        logger.warning(f"Nisu pronađeni podaci za izvođača za zemlju {country}, korišćeni podaci za Srbiju.")
-    
-    phone_contractor = contractor_contacts['phone']
-    email_contractor = contractor_contacts['email']
-    website_contractor_info = f"\\n🌐 \\*Website\\:* {contractor_contacts['website']}" if contractor_contacts.get('website') else ""
-    telegram_contractor_info = f"\\n💬 \\*Telegram Podrška\\:* {contractor_contacts['telegram']}" if contractor_contacts.get('telegram') else ""
-
-    response_text = ""
-
-    # Ako je zemlja Srbija, dodajemo i podatke o PROIZVOĐAČU
-    manufacturer_details_text = ""
-    if country == 'srbija' and 'manufacturer' in contact_info['srbija']:
-        manufacturer_data = contact_info['srbija']['manufacturer']
-        manufacturer_name = manufacturer_data['name']
-        manufacturer_phone = manufacturer_data.get('phone', 'N/A')
-        manufacturer_email = manufacturer_data.get('email', 'N/A')
-        manufacturer_website_info = f"\\n🌐 \\*Website\\:* {manufacturer_data['website']}" if manufacturer_data.get('website') else ""
-        manufacturer_telegram_info = f"\\n💬 \\*Telegram Podrška\\:* {manufacturer_data['telegram']}" if manufacturer_data.get('telegram') else ""
-
-        manufacturer_details_text = (
-            f"\\n\\n---\\n\\n\\*Kontakt za Proizvođača \\({manufacturer_name}\\)\\*:"
-            f"\\n📞 \\*Telefon\\:* `{manufacturer_phone}`"
-            f"\\n✉️ \\*Email\\:* {manufacturer_email}"
-            f"{manufacturer_website_info}"
-            f"{manufacturer_telegram_info}"
-        )
-
-    # Generisanje poruke za izvođača
-    contractor_message_part = messages["contractor_info"].format(
-        phone=phone_contractor,
-        email=email_contractor,
-        website_info=website_contractor_info,
-        telegram_info=telegram_contractor_info
-    )
-
-    if context_type == "hp_quote":
-        hp_type_chosen = context.user_data[user_id].get('hp_type', 'neodređeni tip').replace("_", " ").title()
-        country_name = messages["srbija_button"].replace(" 🇷🇸", "") if country == 'srbija' else messages["crna_gora_button"].replace(" 🇲🇪", "")
-        
-        response_text = messages["hp_offer_info"].format(
-            hp_type=hp_type_chosen,
-            country_name=country_name
-        )
-        if country == 'srbija':
-            response_text += manufacturer_details_text
-            response_text += f"\\n\\n{contractor_message_part}"
-            
-    elif context_type == "hp_redirect":
-        response_text = contractor_message_part
-        if country == 'srbija':
-            response_text += manufacturer_details_text
-
-    else: # general_contact
-        response_text = contractor_message_part
-        if country == 'srbija':
-            response_text += manufacturer_details_text
-
-    await context.bot.send_message(chat_id=user_id, text=response_text, parse_mode=ParseMode.MARKDOWN_V2)
-    return ConversationHandler.END
-
-
-# Glavna start funkcija
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    user_id = update.effective_user.id
-    logger.debug(f"start funkcija pozvana za korisnika {user_id}")
-
-    if user_id not in context.user_data:
-        context.user_data[user_id] = {'lang': 'en', 'session_active': True}
-        logger.debug(f"Inicijalizovan user_data za novog korisnika {user_id}: {context.user_data[user_id]}")
-    else:
-        context.user_data[user_id]['session_active'] = True
-        if 'messages' not in context.user_data[user_id]:
-            context.user_data[user_id]['messages'] = load_messages(context.user_data[user_id].get('lang', 'en'))
-        logger.debug(f"Postojeći user_data za korisnika {user_id}: {context.user_data[user_id]}")
-
-    messages = context.user_data[user_id]['messages']
+    messages = load_messages(user_data[user_id]['lang'])
 
     keyboard = [
         [InlineKeyboardButton("Srpski 🇷🇸", callback_data='lang_sr')],
         [InlineKeyboardButton("English 🇬🇧", callback_data='lang_en')],
-        [InlineKeyboardButton("Русский 🇷🇺", callback_data='lang_ru')]
+        [InlineKeyboardButton("Русский 🇷🇺", callback_data='lang_ru')],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-
     await update.message.reply_text(messages["start_message"], reply_markup=reply_markup)
-    logger.info(f"Korisnik {user_id} je dobio start poruku.")
+
+async def choose_country(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int) -> None:
+    messages = load_messages(user_data[user_id]['lang'])
     
-    return CHOOSE_INSTALLATION_TYPE
-
-# Funkcija za obradu odabira jezika
-async def language_selection(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    query = update.callback_query
-    await query.answer()
-    user_id = query.from_user.id
-    selected_lang = query.data.split('_')[1]
-
-    context.user_data[user_id]['lang'] = selected_lang
-    context.user_data[user_id]['messages'] = load_messages(selected_lang)
-    messages = context.user_data[user_id]['messages']
-
-    await query.edit_message_reply_markup(reply_markup=None)
-
     keyboard = [
-        [
-            InlineKeyboardButton(messages["srbija_button"], callback_data='country_srbija'),
-            InlineKeyboardButton(messages["crna_gora_button"], callback_data='country_crna_gora')
-        ]
+        [InlineKeyboardButton(messages["srbija_button"], callback_data='country_srbija')],
+        [InlineKeyboardButton(messages["crna_gora_button"], callback_data='country_crna_gora')],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await context.bot.send_message(chat_id=user_id, text=messages["language_selected"], reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN_V2)
-    return CHOOSE_INSTALLATION_TYPE
+    await context.bot.send_message(chat_id=user_id, text=messages["choose_country"], reply_markup=reply_markup)
 
-# Funkcija za obradu odabira države
-async def country_selection(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    query = update.callback_query
-    await query.answer()
-    user_id = query.from_user.id
-    selected_country = query.data.split('_')[1]
-
-    context.user_data[user_id]['country'] = selected_country
-    messages = context.user_data[user_id]['messages']
+async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int) -> None:
+    messages = load_messages(user_data[user_id]['lang'])
     
-    country_name = ""
-    if selected_country == 'srbija':
-        country_name = messages["srbija_button"].replace(" 🇷🇸", "")
-    elif selected_country == 'crna_gora':
-        country_name = messages["crna_gora_button"].replace(" 🇲🇪", "")
-
-    await query.edit_message_reply_markup(reply_markup=None)
-
     keyboard = [
-        [InlineKeyboardButton(messages["request_quote_button"], callback_data='request_quote')],
-        [InlineKeyboardButton(messages["services_info_button"], callback_data='services_info')],
-        [InlineKeyboardButton(messages["faq_button"], callback_data='faq')],
-        [InlineKeyboardButton(messages["contact_button"], callback_data='contact')]
+        [InlineKeyboardButton(messages["request_quote_button"], callback_data='menu_quote')],
+        [InlineKeyboardButton(messages["services_info_button"], callback_data='menu_services')],
+        [InlineKeyboardButton(messages["faq_button"], callback_data='menu_faq')],
+        [InlineKeyboardButton(messages["contact_button"], callback_data='menu_contact')],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
+    await context.bot.send_message(chat_id=user_id, text=messages["main_menu_greeting"], reply_markup=reply_markup)
 
-    await context.bot.send_message(
-        chat_id=user_id,
-        text=messages["country_selected"].format(country_name=country_name) + "\\n\\n" + messages["main_menu_greeting"],
-        reply_markup=reply_markup,
-        parse_mode=ParseMode.MARKDOWN_V2
-    )
-    return CHOOSE_INSTALLATION_TYPE
+async def choose_installation_type_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int) -> None:
+    messages = load_messages(user_data[user_id]['lang'])
 
-# Funkcija za obradu opcija glavnog menija
-async def main_menu_options(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    keyboard = [
+        [InlineKeyboardButton(messages["heating_installation_button"], callback_data='type_heating')],
+        [InlineKeyboardButton(messages["heat_pump_button"], callback_data='type_heatpump')],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await context.bot.send_message(chat_id=user_id, text=messages["choose_installation_type"], reply_markup=reply_markup)
+
+# --- NOVE FUNKCIJE ZA SPECIFIČNE MENIJE ---
+
+async def show_srbija_heating_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int) -> None:
+    messages = load_messages(user_data[user_id]['lang'])
+    await context.bot.send_message(chat_id=user_id, text=messages["srbija_heating_intro"])
+
+    keyboard = [
+        [InlineKeyboardButton(messages["radiators_button"], callback_data='system_srb_radiators')],
+        [InlineKeyboardButton(messages["fan_coils_button"], callback_data='system_srb_fan_coils')],
+        [InlineKeyboardButton(messages["underfloor_heating_button"], callback_data='system_srb_underfloor')],
+        [InlineKeyboardButton(messages["underfloor_plus_fan_coils_button"], callback_data='system_srb_underfloor_plus_fan_coils')],
+        [InlineKeyboardButton(messages["complete_heat_pump_offer_button"], callback_data='system_srb_complete_hp')],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await context.bot.send_message(chat_id=user_id, text=messages["choose_heating_system"], reply_markup=reply_markup)
+
+async def show_srbija_heat_pump_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int) -> None:
+    messages = load_messages(user_data[user_id]['lang'])
+    await context.bot.send_message(chat_id=user_id, text=messages["srbija_heat_pump_intro"])
+
+    keyboard = [
+        [InlineKeyboardButton(messages["water_water_hp_button"], callback_data='hp_srb_water_water')],
+        [InlineKeyboardButton(messages["air_water_hp_button"], callback_data='hp_srb_air_water')],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await context.bot.send_message(chat_id=user_id, text=messages["choose_installation_type"], reply_markup=reply_markup)
+
+async def show_crna_gora_heating_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int) -> None:
+    messages = load_messages(user_data[user_id]['lang'])
+    await context.bot.send_message(chat_id=user_id, text=messages["crna_gora_heating_intro"])
+
+    keyboard = [
+        [InlineKeyboardButton(messages["radiators_button"], callback_data='system_cg_radiators')],
+        [InlineKeyboardButton(messages["fan_coils_button"], callback_data='system_cg_fan_coils')],
+        [InlineKeyboardButton(messages["underfloor_heating_button"], callback_data='system_cg_underfloor')],
+        [InlineKeyboardButton(messages["underfloor_plus_fan_coils_button"], callback_data='system_cg_underfloor_plus_fan_coils')],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await context.bot.send_message(chat_id=user_id, text=messages["choose_heating_system"], reply_markup=reply_markup)
+
+async def show_crna_gora_heat_pump_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int) -> None:
+    messages = load_messages(user_data[user_id]['lang'])
+    await context.bot.send_message(chat_id=user_id, text=messages["crna_gora_heat_pump_intro"])
+    # Za Crnu Goru je samo Vazduh-voda, pa može i direktna poruka sa info, bez menija
+    await context.bot.send_message(chat_id=user_id, text=messages["instal_m_info"], parse_mode='Markdown')
+    # Ovdje može da se pređe direktno na formu za upit
+    await query_start(update, context)
+
+
+# Glavni handler za sve "inline" dugmiće
+async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
+
     user_id = query.from_user.id
-    messages = context.user_data[user_id]['messages']
-    selected_option = query.data
+    callback_data = query.data
 
-    await query.edit_message_reply_markup(reply_markup=None)
+    # Osiguraj da user_data za korisnika postoji
+    if user_id not in user_data:
+        user_data[user_id] = {'lang': 'en'}
 
-    if selected_option == 'request_quote':
-        await context.bot.send_message(chat_id=user_id, text=messages["quote_request_acknowledgement"])
-        return await request_quote_process(update, context)
-    elif selected_option == 'services_info':
-        await context.bot.send_message(chat_id=user_id, text="Usluge koje nudimo uključuju projektovanje, montažu i održavanje sistema grejanja i hlađenja, kao i rešenja sa toplotnim pumpama\\.", parse_mode=ParseMode.MARKDOWN_V2)
-    elif selected_option == 'faq':
-        await context.bot.send_message(chat_id=user_id, text="Česta pitanja: Kako odabrati pravu toplotnu pumpu\\? Koja je razlika između split i monoblok sistema\\? Za sve nedoumice, kontaktirajte nas!", parse_mode=ParseMode.MARKDOWN_V2)
-    elif selected_option == 'contact':
-        return await offer_contact_info(update, context, "general_contact")
+    messages = load_messages(user_data[user_id]['lang'])
+
+    if callback_data.startswith('lang_'):
+        lang_code = callback_data.split('_')[1]
+        user_data[user_id]['lang'] = lang_code
+        messages = load_messages(lang_code)
+        await query.edit_message_text(text=messages["language_selected"])
+        await choose_country(update, context, user_id)
+
+    elif callback_data.startswith('country_'):
+        country_code = callback_data.split('_')[1]
+        user_data[user_id]['country'] = country_code
+        
+        country_name = messages["srbija_button"] if country_code == 'srbija' else messages["crna_gora_button"]
+        # Popravio placeholder za Srbija/Crna Gora
+        await query.edit_message_text(text=f"{messages['country_selected'].replace('Srbija', country_name).replace('Serbia', country_name).replace('Сербию', country_name)}")
+        
+        await show_main_menu(update, context, user_id)
+
+    elif callback_data.startswith('menu_'):
+        menu_option = callback_data.split('_')[1]
+        
+        if menu_option == 'quote':
+            await query.edit_message_text(text=messages["request_quote_button"])
+            await choose_installation_type_menu(update, context, user_id)
+        elif menu_option == 'services':
+            await query.edit_message_text(text=messages["services_info_button"] + "...")
+            # Dalja logika za prikaz usluga
+        elif menu_option == 'faq':
+            await query.edit_message_text(text=messages["faq_button"] + "...")
+            # Dalja logika za FAQ
+        elif menu_option == 'contact':
+            await query.edit_message_text(text=messages["contact_button"] + "...")
+            # Dalja logika za prikaz kontakta
+
+    elif callback_data.startswith('type_'):
+        installation_type = callback_data.split('_')[1]
+        user_data[user_id]['installation_type'] = installation_type
+        
+        selected_country = user_data[user_id].get('country')
+
+        await query.edit_message_text(text=f"{messages[f'{installation_type}_installation_button']} je odabrana.")
+
+        if installation_type == 'heating':
+            if selected_country == 'srbija':
+                await show_srbija_heating_menu(update, context, user_id)
+            elif selected_country == 'crna_gora':
+                await show_crna_gora_heating_menu(update, context, user_id)
+        elif installation_type == 'heatpump':
+            if selected_country == 'srbija':
+                await show_srbija_heat_pump_menu(update, context, user_id)
+            elif selected_country == 'crna_gora':
+                await show_crna_gora_heat_pump_menu(update, context, user_id)
+        
+    elif callback_data.startswith('system_'): # Obrađuje izbor grejnog sistema (Srbija i Crna Gora)
+        system_type = callback_data.split('_')[2] # Npr. srb_radiators -> radiators
+        user_data[user_id]['heating_system_type'] = system_type
+
+        # Prikaz informacija o izvođaču pre nego što tražimo detalje o objektu
+        selected_country = user_data[user_id].get('country')
+        if selected_country == 'srbija':
+            await query.message.reply_text(messages["srbija_heating_intro"])
+        elif selected_country == 'crna_gora':
+            await query.message.reply_text(messages["crna_gora_heating_intro"])
+        
+        # Prikazuje poruku o odabranom sistemu
+        await query.edit_message_text(text=f"{messages[f'{system_type}_button']} je odabrano.")
+
+        # Sada započinjemo konverzaciju za prikupljanje detalja o objektu
+        await query_start(update, context)
+        return CHOOSE_OBJECT_TYPE # Prebacujemo stanje konverzacije
+
+    elif callback_data.startswith('hp_'): # Obrađuje izbor toplotne pumpe (Srbija)
+        hp_type = callback_data.split('_')[2] # Npr. srb_water_water -> water_water
+        user_data[user_id]['heat_pump_subtype'] = hp_type
+
+        await query.edit_message_text(text=f"{messages[f'{hp_type}_hp_button']} je odabrana.")
+        await query.message.reply_text(messages["microma_info"], parse_mode='Markdown') # Prikazuje info o Micromi
+
+        # Sada započinjemo konverzaciju za prikupljanje detalja o objektu
+        await query_start(update, context)
+        return CHOOSE_OBJECT_TYPE # Prebacujemo stanje konverzacije
+
+    elif callback_data == 'confirm_inquiry':
+        return await send_inquiry(update, context)
     
-    return CHOOSE_INSTALLATION_TYPE
+    elif callback_data == 'cancel_inquiry':
+        return await cancel_inquiry(update, context)
 
+# --- Conversation Handler za prikupljanje podataka o objektu ---
 
-# Funkcija za pokretanje procesa zahteva za ponudu
-async def request_quote_process(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def query_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_id = update.effective_user.id
-    messages = context.user_data[user_id]['messages']
+    messages = load_messages(user_data[user_id]['lang'])
+    # Inicijalizacija privremenih podataka za upit
+    context.user_data['inquiry'] = {
+        'country': user_data[user_id].get('country'),
+        'installation_type': user_data[user_id].get('installation_type'),
+        'heating_system_type': user_data[user_id].get('heating_system_type'),
+        'heat_pump_subtype': user_data[user_id].get('heat_pump_subtype'),
+        'object_type': None,
+        'surface_area': None,
+        'num_floors': None,
+        'sketch_attached': False,
+        'sketch_file_id': None,
+        'contact_name': None,
+        'contact_phone': None,
+        'contact_email': None
+    }
+    await context.bot.send_message(chat_id=user_id, text=messages["request_object_details"])
+    return CHOOSE_OBJECT_TYPE
 
-    keyboard = [
-        [InlineKeyboardButton(messages["heating_installation_button"], callback_data='inst_heating')],
-        [InlineKeyboardButton(messages["heat_pump_button"], callback_data='inst_hp')]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
+async def get_object_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    user_id = update.effective_user.id
+    messages = load_messages(user_data[user_id]['lang'])
+    context.user_data['inquiry']['object_type'] = update.message.text
+    await update.message.reply_text(messages["request_surface_area"])
+    return ENTER_SURFACE_AREA
 
-    if update.callback_query:
-        await update.callback_query.edit_message_text(messages["choose_installation_type"], reply_markup=reply_markup)
+async def get_surface_area(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    user_id = update.effective_user.id
+    messages = load_messages(user_data[user_id]['lang'])
+    try:
+        surface_area = int(update.message.text)
+        context.user_data['inquiry']['surface_area'] = surface_area
+        await update.message.reply_text(messages["request_number_of_floors"])
+        return ENTER_NUM_FLOORS
+    except ValueError:
+        await update.message.reply_text("Molimo unesite validan broj za površinu.")
+        return ENTER_SURFACE_AREA
+
+async def get_num_floors(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    user_id = update.effective_user.id
+    messages = load_messages(user_data[user_id]['lang'])
+    try:
+        num_floors = int(update.message.text)
+        context.user_data['inquiry']['num_floors'] = num_floors
+        await update.message.reply_text(messages["request_sketch"])
+        return SEND_SKETCH
+    except ValueError:
+        await update.message.reply_text("Molimo unesite validan broj za spratnost.")
+        return ENTER_NUM_FLOORS
+
+async def get_sketch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    user_id = update.effective_user.id
+    messages = load_messages(user_data[user_id]['lang'])
+
+    if update.message.document:
+        context.user_data['inquiry']['sketch_attached'] = True
+        context.user_data['inquiry']['sketch_file_id'] = update.message.document.file_id
+        await update.message.reply_text("Skica je primljena.")
+    elif update.message.photo:
+        context.user_data['inquiry']['sketch_attached'] = True
+        # Uzmi najveću rezoluciju slike
+        context.user_data['inquiry']['sketch_file_id'] = update.message.photo[-1].file_id
+        await update.message.reply_text("Skica (slika) je primljena.")
+    elif update.message.text and update.message.text.lower() == messages["request_sketch"].split("'")[1].lower(): # If user says 'No'/'Ne'
+        context.user_data['inquiry']['sketch_attached'] = False
+        await update.message.reply_text("Nema skice.")
     else:
-        await context.bot.send_message(chat_id=user_id, text=messages["choose_installation_type"], reply_markup=reply_markup)
+        await update.message.reply_text("Molimo pošaljite skicu kao sliku/PDF ili pošaljite 'Ne'.")
+        return SEND_SKETCH
     
-    return CHOOSE_INSTALLATION_TYPE
+    await update.message.reply_text(messages["request_contact_info"])
+    return ENTER_CONTACT_INFO
 
-# Funkcija za obradu odabira tipa instalacije
-async def installation_type_selection(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    query = update.callback_query
-    await query.answer()
-    user_id = query.from_user.id
-    selected_type = query.data.split('_')[1]
-    messages = context.user_data[user_id]['messages']
+async def get_contact_info(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    user_id = update.effective_user.id
+    messages = load_messages(user_data[user_id]['lang'])
+    
+    contact_text = update.message.text
+    # Simple regex to extract name and phone (assumes common formats)
+    match = re.match(r"([\w\sčćšđžČĆŠĐŽ.]+),\s*([\d\s\/\+\-]+)", contact_text)
+    if match:
+        context.user_data['inquiry']['contact_name'] = match.group(1).strip()
+        context.user_data['inquiry']['contact_phone'] = match.group(2).strip()
+        await update.message.reply_text(messages["request_email"])
+        return ENTER_EMAIL
+    else:
+        await update.message.reply_text("Format je pogrešan. Molimo unesite Ime Prezime, Telefon (npr. Petar Petrović, 06x/xxx-xxxx).")
+        return ENTER_CONTACT_INFO
 
-    context.user_data[user_id]['installation_type'] = selected_type
+async def get_email(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    user_id = update.effective_user.id
+    messages = load_messages(user_data[user_id]['lang'])
+    email = update.message.text
 
-    await query.edit_message_reply_markup(reply_markup=None)
+    if re.match(r"[^@]+@[^@]+\.[^@]+", email): # Basic email validation
+        context.user_data['inquiry']['contact_email'] = email
+        inquiry_data = context.user_data['inquiry']
 
-    if selected_type == 'heating':
+        # Priprema poruke za potvrdu
+        confirm_text = messages["confirm_details"].format(
+            object_type=inquiry_data['object_type'],
+            surface_area=inquiry_data['surface_area'],
+            num_floors=inquiry_data['num_floors'],
+            sketch_attached=messages["confirm_button"] if inquiry_data['sketch_attached'] else messages["cancel_button"], # Placeholder za 'Da'/'Ne'
+            contact_name=inquiry_data['contact_name'],
+            contact_phone=inquiry_data['contact_phone'],
+            contact_email=inquiry_data['contact_email']
+        )
+
         keyboard = [
-            [InlineKeyboardButton(messages["radiators_button"], callback_data='heating_radiators')],
-            [InlineKeyboardButton(messages["fan_coil_button"], callback_data='heating_fancoil')],
-            [InlineKeyboardButton(messages["underfloor_heating_button"], callback_data='heating_underfloor')],
-            [InlineKeyboardButton(messages["underfloor_fan_coil_button"], callback_data='heating_underfloor_fancoil')],
-            [InlineKeyboardButton(messages["complete_with_hp_button"], callback_data='heating_complete_hp')],
-            [InlineKeyboardButton(messages["existing_installation_button"], callback_data='heating_existing')]
+            [InlineKeyboardButton(messages["confirm_button"], callback_data='confirm_inquiry')],
+            [InlineKeyboardButton(messages["cancel_button"], callback_data='cancel_inquiry')],
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await context.bot.send_message(chat_id=user_id, text=messages["choose_heating_system"], reply_markup=reply_markup)
-        return CHOOSE_HEATING_SYSTEM
-    elif selected_type == 'hp':
-        country = context.user_data[user_id].get('country', 'srbija')
-        if country == 'crna_gora':
-            cg_contractor = contact_info['crna_gora']['contractor']
-            hp_type_cg = "Toplotna pumpa Vazduh\\-Voda"
-            country_name_cg = messages["crna_gora_button"].replace(" 🇲🇪", "")
 
-            response_text_cg = messages["hp_offer_info"].format(
-                hp_type=hp_type_cg,
-                country_name=country_name_cg
-            )
-            response_text_cg += messages["contractor_info"].format(
-                phone=cg_contractor['phone'],
-                email=cg_contractor['email'],
-                website_info=f"\\n🌐 \\*Website\\:* {cg_contractor['website']}" if cg_contractor.get('website') else "",
-                telegram_info=f"\\n💬 \\*Telegram Podrška\\:* {cg_contractor['telegram']}" if cg_contractor.get('telegram') else ""
-            )
-            
-            await context.bot.send_message(chat_id=user_id, text=response_text_cg, parse_mode=ParseMode.MARKDOWN_V2)
-            return ConversationHandler.END
-        else:
-            return await choose_heat_pump_type(update, context)
-
-
-# Funkcija za odabir tipa toplotne pumpe
-async def choose_heat_pump_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    user_id = update.effective_user.id
-    messages = context.user_data[user_id]['messages']
-
-    keyboard = [
-        [InlineKeyboardButton("Split sistem", callback_data='hp_split')],
-        [InlineKeyboardButton("Monoblok sistem", callback_data='hp_monoblock')]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-
-    if update.callback_query:
-        await update.callback_query.edit_message_text(messages["choose_heat_pump_type"], reply_markup=reply_markup)
+        await update.message.reply_text(confirm_text, reply_markup=reply_markup)
+        return CONFIRM_DETAILS
     else:
-        await context.bot.send_message(chat_id=user_id, text=messages["choose_heat_pump_type"], reply_markup=reply_markup)
-    
-    return CHOOSE_HEAT_PUMP_TYPE
+        await update.message.reply_text("Molimo unesite validnu email adresu.")
+        return ENTER_EMAIL
 
-# Funkcija za obradu odabira grejnog sistema
-async def heating_system_selection(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def send_inquiry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
+
     user_id = query.from_user.id
-    selected_system = query.data.split('_')[1]
-    messages = context.user_data[user_id]['messages']
+    messages = load_messages(user_data[user_id]['lang'])
+    inquiry_data = context.user_data['inquiry']
 
-    context.user_data[user_id]['heating_system'] = selected_system
+    # Preuzimanje email adresa za slanje
+    sender_email = os.getenv("EMAIL_SENDER_EMAIL")
+    app_password = os.getenv("EMAIL_APP_PASSWORD")
+    admin_bcc_email = os.getenv("ADMIN_BCC_EMAIL")
 
-    await query.edit_message_reply_markup(reply_markup=None)
+    recipient_email = ""
+    # Odredite kome se šalje email na osnovu zemlje i tipa instalacije
+    if inquiry_data['country'] == 'srbija':
+        recipient_email = "igor.boskovic@example.com" # Stvarni email Igora Boškovića
+        if inquiry_data['installation_type'] == 'heatpump':
+             recipient_email = "microma.doo@example.com" # Stvarni email Microme
+    elif inquiry_data['country'] == 'crna_gora':
+        recipient_email = "instal.m@example.com" # Stvarni email Instal M
 
-    if selected_system == 'complete_hp' or selected_system == 'existing':
-        await context.bot.send_message(chat_id=user_id, text=messages["redirect_to_hp"], parse_mode=ParseMode.MARKDOWN_V2)
-        return await offer_contact_info(update, context, "hp_redirect")
-    else:
-        keyboard = [
-            [InlineKeyboardButton(messages["send_sketch_button"], callback_data='sketch_yes')],
-            [InlineKeyboardButton(messages["no_sketch_button"], callback_data='sketch_no')]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await context.bot.send_message(chat_id=user_id, text=messages["request_sketch_optional"], reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN_V2)
-        return UPLOAD_SKETCH
-
-# Funkcija za obradu odabira tipa toplotne pumpe (nakon odabira)
-async def heat_pump_type_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    query = update.callback_query
-    await query.answer()
-    user_id = query.from_user.id
-    selected_hp_type = query.data.split('_')[1]
-    messages = context.user_data[user_id]['messages']
-
-    context.user_data[user_id]['hp_type'] = selected_hp_type
-
-    await query.edit_message_reply_markup(reply_markup=None)
-    
-    return await offer_contact_info(update, context, "hp_quote")
-
-# Funkcija za obradu opcija skice
-async def sketch_option(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    query = update.callback_query
-    await query.answer()
-    user_id = query.from_user.id
-    messages = context.user_data[user_id]['messages']
-    choice = query.data.split('_')[1]
-
-    await query.edit_message_reply_markup(reply_markup=None)
-
-    if choice == 'yes':
-        await context.bot.send_message(chat_id=user_id, text=messages["request_sketch"], parse_mode=ParseMode.MARKDOWN_V2)
-        return UPLOAD_SKETCH
-    else:
-        await context.bot.send_message(chat_id=user_id, text=messages["no_sketch_confirmation"], parse_mode=ParseMode.MARKDOWN_V2)
+    if not all([sender_email, app_password, recipient_email]):
+        logger.error("Nedostaju email konfiguracije za slanje upita.")
+        await query.edit_message_text("Došlo je do greške prilikom slanja upita. Molimo pokušajte ponovo kasnije.")
+        # Prekini konverzaciju u slučaju greške
         return ConversationHandler.END
+    
+    # Sakupljanje podataka za email telo
+    email_body = f"Novi upit sa Telegram bota:\n\n" \
+                 f"Zemlja: {inquiry_data.get('country')}\n" \
+                 f"Tip instalacije: {inquiry_data.get('installation_type')}\n" \
+                 f"Sistem grejanja: {inquiry_data.get('heating_system_type', 'N/A')}\n" \
+                 f"Podtip TP: {inquiry_data.get('heat_pump_subtype', 'N/A')}\n" \
+                 f"Tip objekta: {inquiry_data.get('object_type')}\n" \
+                 f"Površina: {inquiry_data.get('surface_area')} m²\n" \
+                 f"Spratnost: {inquiry_data.get('num_floors')}\n" \
+                 f"Skica priložena: {'Da' if inquiry_data['sketch_attached'] else 'Ne'}\n" \
+                 f"Ime i prezime: {inquiry_data.get('contact_name')}\n" \
+                 f"Telefon: {inquiry_data.get('contact_phone')}\n" \
+                 f"Email korisnika: {inquiry_data.get('contact_email')}\n\n" \
+                 f"Korisnik ID: {user_id}"
 
-# Funkcija za obradu primljene skice
-async def handle_sketch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    user_id = update.effective_user.id
-    messages = context.user_data[user_id]['messages']
+    try:
+        yag = yagmail.SMTP(user=sender_email, password=app_password)
+        
+        # Prikaci skicu ako postoji
+        attachments = []
+        if inquiry_data['sketch_attached'] and inquiry_data['sketch_file_id']:
+            file_id = inquiry_data['sketch_file_id']
+            # Preuzmi fajl sa Telegrama
+            telegram_file = await context.bot.get_file(file_id)
+            # Privremeno sačuvaj fajl lokalno da bi yagmail mogao da ga prikači
+            file_path = f"{file_id}.{telegram_file.file_path.split('.')[-1]}"
+            await telegram_file.download_to_drive(file_path)
+            attachments.append(file_path)
+            logger.info(f"Skica preuzeta i biće prikačena: {file_path}")
 
-    if update.message.photo:
-        file_id = update.message.photo[-1].file_id
-        file_type = "sliku"
-    elif update.message.document:
-        file_id = update.message.document.file_id
-        file_type = "dokument"
-    else:
-        await context.bot.send_message(chat_id=user_id, text=messages.get("invalid_file_type", "Molimo pošaljite fotografiju ili dokument\\."), parse_mode=ParseMode.MARKDOWN_V2)
-        return UPLOAD_SKETCH
+        yag.send(
+            to=recipient_email,
+            bcc=admin_bcc_email, # Šalje kopiju i tebi
+            subject=f"Novi upit za ponudu: {inquiry_data.get('country').upper()} - {inquiry_data.get('installation_type').capitalize()}",
+            contents=email_body,
+            attachments=attachments
+        )
+        await query.edit_message_text(text=messages["inquiry_sent_success"])
+        logger.info(f"Upit uspešno poslat na {recipient_email} (BCC: {admin_bcc_email}) od korisnika {user_id}.")
 
-    logger.info(f"Skica (ID: {file_id}) primljena od korisnika {user_id}")
+        # Obriši privremeni fajl skice ako postoji
+        if attachments and os.path.exists(attachments[0]):
+            os.remove(attachments[0])
+            logger.info(f"Privremeni fajl skice obrisan: {attachments[0]}")
 
-    await context.bot.send_message(chat_id=user_id, text=messages["sketch_received"], parse_mode=ParseMode.MARKDOWN_V2)
+    except Exception as e:
+        logger.error(f"Greška prilikom slanja emaila za upit {user_id}: {e}")
+        await query.edit_message_text("Došlo je do greške prilikom slanja upita. Molimo pokušajte ponovo kasnije.")
 
-    # Obaveštenje adminima o primljenoj skici
-    user_info = update.effective_user.mention_markdown_v2()
-    notification_message = (
-        f"Nova skica primljena od korisnika {user_info} (ID: `{user_id}`)\\.\\n"
-        f"Tip fajla: \\*{file_type}\\*\\n"
-        f"ID fajla: `{file_id}`"
-    )
-    await notify_admins(context, notification_message)
-
+    context.user_data.clear() # Očisti podatke nakon završenog upita
     return ConversationHandler.END
 
-# Funkcija za obradu grešaka
-async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    logger.error(f"Update {update} prouzrokovao grešku {context.error}")
-    
-    # Dodata provera da update nije None pre nego što se pokuša pristup effective_user
-    user_id = update.effective_user.id if update and update.effective_user else None
-    
-    messages = {}
-    if user_id and user_id in context.user_data and 'messages' in context.user_data[user_id]:
-        messages = context.user_data[user_id]['messages']
-    else:
-        messages = load_messages('en')
+async def cancel_inquiry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    user_id = query.from_user.id
+    messages = load_messages(user_data[user_id]['lang'])
+    await query.edit_message_text(text=messages["inquiry_canceled"])
+    context.user_data.clear() # Očisti podatke
+    return ConversationHandler.END
 
-    error_message_key = "error_occurred"
-    # Proverava specifičnu grešku za "Can't parse entities"
-    if isinstance(context.error, Exception) and "Can't parse entities" in str(context.error):
-        error_message_key = "session_expired_restart_needed" 
-        logger.error(f"Greška prilikom obaveštavanja korisnika o isteku sesije: {context.error}")
-        # Pokušaj da pošalješ poruku bez MarkdownV2 parsiranja kao fallback
-        if user_id: # Pošalji poruku samo ako postoji user_id
-            try:
-                await context.bot.send_message(chat_id=user_id, text=messages[error_message_key].replace("\\", ""), parse_mode=None)
-            except Exception as e:
-                logger.error(f"Sekundarna greška prilikom slanja fallback poruke: {e}")
-                await context.bot.send_message(chat_id=user_id, text="Došlo je do greške u sesiji\\. Molimo kucajte /start da biste počeli ispočetka\\.", parse_mode=ParseMode.MARKDOWN_V2)
-        else: # Ako nema user_id, samo loguj
-            logger.error(f"Nije moguće poslati poruku greške jer user_id nije dostupan. Originalna greška: {context.error}")
-    else:
-        if user_id: # Pošalji poruku samo ako postoji user_id
-            await context.bot.send_message(chat_id=user_id, text=messages[error_message_key], parse_mode=ParseMode.MARKDOWN_V2)
-        else: # Ako nema user_id, samo loguj
-            logger.error(f"Nije moguće poslati poruku greške jer user_id nije dostupan. Originalna greška: {context.error}")
+async def conversation_timeout(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    user_id = update.effective_user.id
+    messages = load_messages(user_data[user_id]['lang'])
+    await context.bot.send_message(chat_id=user_id, text="Vreme za unos je isteklo. Molimo počnite ponovo sa /start.")
+    context.user_data.clear()
+    return ConversationHandler.END
 
-# Funkcija za brisanje webhooka
-async def delete_telegram_webhook(bot_token: str) -> None:
-    """Pokušava da obriše postojeći Telegram webhook."""
-    # Koristimo httpx za direktan HTTP poziv jer telegram.ext nema jednostavnu metodu za to izvan aplikacije
-    import httpx
-    url = f"https://api.telegram.org/bot{bot_token}/deleteWebhook"
-    try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(url)
-            response.raise_for_status()  # Podiže HTTPStatusError za 4xx/5xx odgovore
-            logger.info(f"Uspešno obrisan webhook: {response.json()}")
-    except httpx.HTTPStatusError as e:
-        logger.warning(f"Greška prilikom brisanja webhooka (verovatno ga nema): {e.response.json()}")
-    except httpx.RequestError as e:
-        logger.error(f"Mrežna greška prilikom brisanja webhooka: {e}")
 
-# Glavna funkcija za pokretanje bota
+# --- Glavna funkcija za pokretanje bota ---
+
 def main() -> None:
-    # Inicijalizacija PicklePersistence mora biti unutar main() funkcije
-    persistence = PicklePersistence(filepath="my_bot_data.pkl")
+    """Pokreni bota."""
+    TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+    WEBHOOK_URL = os.getenv("WEBHOOK_URL") # Dodato za Render deploy
+    PORT = int(os.environ.get('PORT', '8080')) # Dodato za Render deploy
 
-    # Inicijalizacija ApplicationBuilder: Korišćenje builder patterna
-    application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).persistence(persistence).build()
+    if not TELEGRAM_BOT_TOKEN:
+        logger.critical("Greška: TELEGRAM_BOT_TOKEN environment varijabla NIJE podešena! Bot se neće pokrenuti.")
+        raise ValueError("TELEGRAM_BOT_TOKEN environment varijabla nije pronađena.")
+    
+    # Ako se pokreće lokalno, WEBHOOK_URL neće biti podešen
+    is_local_dev = not bool(WEBHOOK_URL)
 
-    # ConversationHandler mora biti definisan NAKON svih funkcija koje koristi
+    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+
+    # Conversation Handler za prikupljanje detalja o objektu
     conv_handler = ConversationHandler(
         entry_points=[
-            CommandHandler('start', start),
-            CallbackQueryHandler(language_selection, pattern='^lang_'),
+            CallbackQueryHandler(query_start, pattern='^(system_|hp_)'), # Započinje kada se izabere tip sistema/HP
         ],
         states={
-            CHOOSE_INSTALLATION_TYPE: [
-                CallbackQueryHandler(language_selection, pattern='^lang_'),
-                CallbackQueryHandler(country_selection, pattern='^country_'),
-                CallbackQueryHandler(installation_type_selection, pattern='^inst_'),
-                CallbackQueryHandler(main_menu_options, pattern='^(request_quote|services_info|faq|contact)$')
-            ],
-            CHOOSE_HEATING_SYSTEM: [
-                CallbackQueryHandler(heating_system_selection, pattern='^heating_')
-            ],
-            UPLOAD_SKETCH: [
-                CallbackQueryHandler(sketch_option, pattern='^sketch_'),
-                MessageHandler(filters.PHOTO | filters.Document.ALL, handle_sketch),
-                CommandHandler('cancel', end_conversation)
-            ],
-            CHOOSE_HEAT_PUMP_TYPE: [
-                CallbackQueryHandler(heat_pump_type_selected, pattern='^hp_')
-            ]
+            CHOOSE_OBJECT_TYPE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_object_type)],
+            ENTER_SURFACE_AREA: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_surface_area)],
+            ENTER_NUM_FLOORS: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_num_floors)],
+            SEND_SKETCH: [MessageHandler(filters.PHOTO | filters.DOCUMENT | (filters.TEXT & ~filters.COMMAND), get_sketch)], # Prima sliku, dokument ili tekst "Ne"
+            ENTER_CONTACT_INFO: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_contact_info)],
+            ENTER_EMAIL: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_email)],
+            CONFIRM_DETAILS: [CallbackQueryHandler(send_inquiry, pattern='confirm_inquiry'),
+                              CallbackQueryHandler(cancel_inquiry, pattern='cancel_inquiry')],
         },
-        fallbacks=[
-            CommandHandler('start', start),
-            CallbackQueryHandler(handle_session_expired),
-            MessageHandler(filters.TEXT & ~filters.COMMAND, handle_invalid_input)
-        ],
-        persistent=True,
-        name="main_conversation"
+        fallbacks=[CommandHandler("cancel", cancel_inquiry)], # Omogućava prekidanje konverzacije
+        # Dodajte timeout ako želite da se konverzacija prekine nakon nekog vremena neaktivnosti
+        # conversation_timeout može biti funkcija koja se poziva kada istekne vreme
+        #conversation_timeout_function=conversation_timeout,
+        #timeout=600 # 10 minuta neaktivnosti
     )
 
-    application.add_handler(conv_handler)
-    application.add_error_handler(error_handler)
+    # Dodaj handlere
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(conv_handler) # Dodaj ConversationHandler
+    application.add_handler(CallbackQueryHandler(button_callback)) # Button callback treba da bude posle conv_handler da bi se obradili callback-ovi koji nisu deo conv_handler-a
 
-    if not IS_LOCAL:
-        logger.info(f"Pokrećem webhook na portu {PORT}")
-        # Važno: Obriši sve postojeće webhookove pre postavljanja novog
-        asyncio.run(delete_telegram_webhook(TELEGRAM_BOT_TOKEN)) 
+    # Pokretanje bota
+  # --- Glavna funkcija za pokretanje bota ---
+
+def main() -> None: # Ovu funkciju nećemo direktno pozivati sa asyncio.run()
+    """Konfiguriše i vraća Telegram Bot Application instancu."""
+    TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+
+    if not TELEGRAM_BOT_TOKEN:
+        logger.critical("Greška: TELEGRAM_BOT_TOKEN environment varijabla NIJE podešena! Bot se neće pokrenuti.")
+        raise ValueError("TELEGRAM_BOT_TOKEN environment varijabla nije pronađena.")
+    
+    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+
+    # Conversation Handler za prikupljanje detalja o objektu
+    conv_handler = ConversationHandler(
+        entry_points=[
+            CallbackQueryHandler(query_start, pattern='^(system_|hp_)'), # Započinje kada se izabere tip sistema/HP
+        ],
+        states={
+            CHOOSE_OBJECT_TYPE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_object_type)],
+            ENTER_SURFACE_AREA: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_surface_area)],
+            ENTER_NUM_FLOORS: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_num_floors)],
+            SEND_SKETCH: [MessageHandler(filters.PHOTO | filters.DOCUMENT | (filters.TEXT & ~filters.COMMAND), get_sketch)], # Prima sliku, dokument ili tekst "Ne"
+            ENTER_CONTACT_INFO: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_contact_info)],
+            ENTER_EMAIL: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_email)],
+            CONFIRM_DETAILS: [CallbackQueryHandler(send_inquiry, pattern='confirm_inquiry'),
+                              CallbackQueryHandler(cancel_inquiry, pattern='cancel_inquiry')],
+        },
+        fallbacks=[CommandHandler("cancel", cancel_inquiry)], # Omogućava prekidanje konverzacije
+        # Dodajte timeout ako želite da se konverzacija prekine nakon nekog vremena neaktivnosti
+        # conversation_timeout može biti funkcija koja se poziva kada istekne vreme
+        #conversation_timeout_function=conversation_timeout,
+        #timeout=600 # 10 minuta neaktivnosti
+    )
+
+    # Dodaj handlere
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(conv_handler) # Dodaj ConversationHandler
+    application.add_handler(CallbackQueryHandler(button_callback)) # Button callback treba da bude posle conv_handler da bi se obradili callback-ovi koji nisu deo conv_handler-a
+    
+    return application # Vraćamo konfigurisanu aplikaciju
+
+
+if __name__ == "__main__":
+    # Ova promenljiva govori da li smo u lokalnom razvojnom okruženju ili na Renderu
+    IS_ON_RENDER = os.getenv("ON_RENDER", "false").lower() == "true"
+    PORT = int(os.environ.get('PORT', '8080'))
+
+    application = main() # Inicijalizacija aplikacije
+
+    if IS_ON_RENDER:
+        # Za Render (deployment), koristimo webhooks
+        WEBHOOK_URL = os.getenv("WEBHOOK_URL")
+        if not WEBHOOK_URL:
+             logger.critical("Greška: WEBHOOK_URL environment varijabla NIJE podešena za Render deployment!")
+             raise ValueError("WEBHOOK_URL environment varijabla nije pronađena.")
         
+        logger.info("Pokrećem bota na Renderu (webhook)...")
+        # Pre pokretanja web servera, uvek podesiti webhook
+        # Ovo mora biti async, pa ćemo ga pozvati sa asyncio.run()
+        import asyncio
+        async def setup_webhook():
+            await application.bot.delete_webhook() # Obriši prethodni ako postoji
+            await application.bot.set_webhook(url=WEBHOOK_URL)
+            logger.info(f"Webhook uspešno postavljen na: {WEBHOOK_URL}")
+
+        asyncio.run(setup_webhook()) # Pokreni async funkciju za postavljanje webhooka
+
+        # Sada pokrećemo webhook server
         application.run_webhook(
             listen="0.0.0.0",
             port=PORT,
-            url_path=TELEGRAM_BOT_TOKEN,
-            webhook_url=WEBHOOK_URL + TELEGRAM_BOT_TOKEN
+            url_path="",
+            webhook_url=WEBHOOK_URL
         )
-    else:
-        logger.info("Pokrećem polling (lokalno)")
-        # Ako pokrećeš polling, takođe obriši webhook da bi izbegao konflikt
-        asyncio.run(delete_telegram_webhook(TELEGRAM_BOT_TOKEN)) # Dodata linija i ovde
-        application.run_polling(poll_interval=3)
+        logger.info("Webhook server je pokrenut i sluša zahteve.")
 
-# Obezbeđujemo da se main() poziva samo kada se skripta pokreće direktno
-if __name__ == "__main__":
-    main()
+    else:
+        # Za lokalni razvoj, koristimo polling
+        logger.info("Pokrećem bota u lokalnom modu (polling)...")
+        application.run_polling(allowed_updates=Update.ALL_TYPES)
+    # Ako se pokreće lokalno, pokreni main funkciju direktno
+    # Ako se pokreće na Renderu, Render poziva aplikaciju preko gunicorn-a
+    # Zato proveravamo da li je WEBHOOK_URL setovan.
+    if not os.getenv("WEBHOOK_URL"):
+        asyncio.run(main())
+    else:
+        # Za Render, gunicorn će pokrenuti aplikaciju
+        # Mi ovdje ne pozivamo main, već će gunicorn instancirati aplikaciju
+        # Međutim, ako koristite "web: python bot.py", onda da.
+        # Ako koristite gunicorn, možda će trebati malo drugačija konfiguracija.
+        # Za sada, neka ostane ovako. Ako se Render bude bunio, prilagodićemo.
+        # P.S. Python 3.13 zahteva malo drugačiji način za async main() ako se ne koristi run_polling direktno.
+        # Trenutni kod je kompatibilan sa asyncio.run(main())
+        pass # Render će pokrenuti putem gunicorn-a ili direktno python bot.py
