@@ -6,15 +6,49 @@ import yagmail # Dodato za slanje emailova
 from dotenv import load_dotenv # Dodato za učitavanje .env fajla lokalno
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    CallbackQueryHandler,
-    ContextTypes,
-    ConversationHandler,
-    MessageHandler,
-    filters
-)
+import os
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters
+# ... ostali importi koje koristiš ...
+
+# ... tvoje funkcije i handler-i ...
+
+def main() -> None:
+    """Pokreće bota."""
+    token = os.getenv("BOT_TOKEN")
+    if not token:
+        raise ValueError("BOT_TOKEN nije postavljen u .env fajlu ili okruženju.")
+
+    application = Application.builder().token(token).build()
+
+    # ... ovde dodaj sve tvoje handlere (npr. command, callback_query, message handlere) ...
+    # Npr:
+    # application.add_handler(CommandHandler("start", start_command))
+    # application.add_handler(CallbackQueryHandler(button_callback))
+    # application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
+    # application.add_handler(conv_handler) # Ako imaš ConversationHandler
+
+    # Određivanje PORTA i WEBHOOK_URL-a
+    # Render automatski postavlja PORT environment varijablu
+    port = int(os.environ.get("PORT", 8443)) # Koristi PORT varijablu koju Render dodeljuje
+    webhook_url = os.environ.get("WEBHOOK_URL") # Ovo ćemo dodati u Render environment varijable
+
+    if webhook_url:
+        # POKRENI BOTA U WEBHOOK MODU
+        print(f"Pokrećem bota u webhook modu na portu {port}...")
+        application.run_webhook(
+            listen="0.0.0.0",  # Slušaj na svim interfejsima
+            port=port,
+            url_path=token,    # URL putanja treba da bude jedinstvena, često se koristi token
+            webhook_url=f"{webhook_url}/{token}" # Pun URL za Telegram
+        )
+        print(f"Webhook URL postavljen na: {webhook_url}/{token}")
+    else:
+        # AKO NEMA WEBHOOK_URL VARIJABLE (ZA LOKALNO TESTIRANJE)
+        print("Pokrećem bota u lokalnom modu (polling)...")
+        application.run_polling(poll_interval=3, timeout=30)
+
+if __name__ == "__main__":
+    main()
 
 # Učitavanje .env fajla za lokalni razvoj (Render automatski radi isto)
 load_dotenv()
