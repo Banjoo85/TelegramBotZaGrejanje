@@ -460,7 +460,8 @@ def main() -> Application: # Promenjen return type da bi Pylance bio srećan
             CHOOSE_OBJECT_TYPE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_object_type)],
             ENTER_SURFACE_AREA: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_surface_area)],
             ENTER_NUM_FLOORS: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_num_floors)],
-            SEND_SKETCH: [MessageHandler(filters.PHOTO | filters.DOCUMENT | (filters.TEXT & ~filters.COMMAND), get_sketch)],
+          # Nova, ispravna linija:
+            SEND_SKETCH: [MessageHandler(filters.PHOTO | filters.Document.ALL | (filters.TEXT & ~filters.COMMAND), get_sketch)],
             ENTER_CONTACT_INFO: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_contact_info)],
             ENTER_EMAIL: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_email)],
             CONFIRM_DETAILS: [CallbackQueryHandler(send_inquiry, pattern='confirm_inquiry'),
