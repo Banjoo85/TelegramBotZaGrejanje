@@ -41,5 +41,6 @@
     "confirm_button": "Da, pošalji upit",
     "cancel_button": "Ne, odustani",
     "inquiry_sent_success": "Vaš upit je uspešno poslat! Bićete kontaktirani uskoro.",
-    "inquiry_canceled": "Upit je otkazan. Možete početi ponovo sa /start."
+    "inquiry_canceled": "Upit je otkazan. Možete početi ponovo sa /start.", 
+    "no_sketch_text": "Ne"
 }

@@ -41,5 +41,6 @@
     "confirm_button": "Да, отправить запрос",
     "cancel_button": "Нет, отменить",
     "inquiry_sent_success": "Ваш запрос успешно отправлен! С вами свяжутся в ближайшее время.",
-    "inquiry_canceled": "Запрос отменен. Вы можете начать снова с /start."
+    "inquiry_canceled": "Запрос отменен. Вы можете начать снова с /start.",
+    "no_sketch_text": "Нет"
 }

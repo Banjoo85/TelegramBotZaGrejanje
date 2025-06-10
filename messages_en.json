@@ -41,5 +41,6 @@
     "confirm_button": "Yes, Send Inquiry",
     "cancel_button": "No, Cancel",
     "inquiry_sent_success": "Your inquiry has been successfully sent! You will be contacted shortly.",
-    "inquiry_canceled": "Inquiry canceled. You can start again with /start."
+    "inquiry_canceled": "Inquiry cancelled. You can start again with /start.",
+    "no_sketch_text": "No"
 }
