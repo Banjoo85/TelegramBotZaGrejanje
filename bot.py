@@ -548,13 +548,13 @@ def main() -> None:
 
 def main() -> None: # Ovu funkciju nećemo direktno pozivati sa asyncio.run()
     """Konfiguriše i vraća Telegram Bot Application instancu."""
-    TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+    BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
-    if not TELEGRAM_BOT_TOKEN:
+    if not BOT_TOKEN:
         logger.critical("Greška: TELEGRAM_BOT_TOKEN environment varijabla NIJE podešena! Bot se neće pokrenuti.")
         raise ValueError("TELEGRAM_BOT_TOKEN environment varijabla nije pronađena.")
     
-    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    application = Application.builder().token(BOT_TOKEN).build()
 
     # Conversation Handler za prikupljanje detalja o objektu
     conv_handler = ConversationHandler(
