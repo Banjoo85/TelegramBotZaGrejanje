@@ -8,6 +8,44 @@ from dotenv import load_dotenv
 ## VAŽNO: Učitavanje .env fajla mora biti na samom vrhu, odmah nakon importova
 load_dotenv()
 
+# --- PODACI ZA KONTAKT I ADMINI ---
+# Ove podatke ćeš sada koristiti direktno iz koda
+contact_info = {
+    'srbija': {
+        # Podaci za IZVOĐAČA RADOVA u Srbiji
+        'contractor': {
+            'phone': '+381603932566',          # Telefon izvođača za Srbiju
+            'email': 'boskovicigor83@gmail.com', # Email izvođača za Srbiju
+            'website': ':',                   # Website izvođača za Srbiju (ako postoji)
+            'telegram': '@IgorNS1983'         # Telegram izvođača za Srbiju (ako postoji)
+        },
+        # Podaci za PROIZVOĐAČA u Srbiji
+        'manufacturer': {
+            'name': 'Microma',                # Naziv proizvođača
+            'phone': '+38163582068',          # Telefon proizvođača (RAZLIČIT)
+            'email': 'office@microma.rs',     # Email proizvođača (RAZLIČIT)
+            'website': 'https://microma.rs',  # Website proizvođača (RAZLIČIT)
+            'telegram': ':'                   # Telegram proizvođača (ako postoji)
+        }
+    },
+    'crna_gora': {
+        # Podaci za IZVOĐAČA RADOVA u Crnoj Gori (nema posebnog proizvođača ovde, samo izvođač)
+        'contractor': {
+            'name': 'Instal M',
+            'phone': '+38267423237',
+            'email': 'office@instalm.me',
+            'website': ':',
+            'telegram': '@ivanmujovic'
+        }
+    }
+}
+
+# Telegram ID-ovi admina koji će primati obaveštenja (TVOJ ID TREBA DA BUDE OVDE)
+ADMIN_IDS = [
+    6869162490, # ZAMENI OVO SA SVOJIM TELEGRAM ID-jem (ADMIN ID 1)
+    # Dodaj ovde i druge ADMIN_IDS ako ih imaš
+]
+
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes, ConversationHandler
 import asyncio # Dodat import za asyncio
@@ -47,19 +85,28 @@ async def send_inquiry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 
     sender_email = os.getenv("EMAIL_SENDER_EMAIL")
     app_password = os.getenv("EMAIL_APP_PASSWORD")
-    admin_bcc_email = os.getenv("ADMIN_BCC_EMAIL")
+    # admin_bcc_email = os.getenv("ADMIN_BCC_EMAIL") # Ako želiš da šalješ Bcc email adminima, postavi ovo u .env
 
     recipient_email = ""
+    # Logika za odabir primaoca emaila na osnovu izbora korisnika
     if inquiry_data['country'] == 'srbija':
-        recipient_email = "igor.boskovic@example.com" # Stvarni email Igora Boškovića
-        if inquiry_data['installation_type'] == 'heatpump':
-             recipient_email = "microma.doo@example.com" # Stvarni email Microme
+        if inquiry_data['installation_type'] == 'heating':
+            # Za "Instalacija grejanja" u Srbiji, email ide izvođaču
+            recipient_email = contact_info['srbija']['contractor']['email']
+        elif inquiry_data['installation_type'] == 'heatpump':
+            if inquiry_data.get('heat_pump_subtype') in ['water_water', 'air_water']:
+                # Za specifične podtipove toplotnih pumpi u Srbiji, email ide izvođaču
+                recipient_email = contact_info['srbija']['contractor']['email']
+            elif inquiry_data.get('heating_system_type') == 'complete_heat_pump_offer':
+                # Za "Kompletnu ponudu toplotne pumpe" u Srbiji, email ide proizvođaču (Microma)
+                recipient_email = contact_info['srbija']['manufacturer']['email']
     elif inquiry_data['country'] == 'crna_gora':
-        recipient_email = "instal.m@example.com" # Stvarni email Instal M
+        # Za Crnu Goru, email uvek ide izvođaču (Instal M)
+        recipient_email = contact_info['crna_gora']['contractor']['email']
 
     if not all([sender_email, app_password, recipient_email]):
-        logger.error("Nedostaju email konfiguracije za slanje upita.")
-        await query.edit_message_text("Došlo je do greške prilikom slanja upita. Molimo pokušajte ponovo kasnije.")
+        logger.error(f"Nedostaju email konfiguracije za slanje upita. Slanje: {sender_email}, Lozinka: {'*' * len(app_password) if app_password else 'Nema'}, Primalac: {recipient_email}")
+        await query.edit_message_text(messages["inquiry_send_error"]) # Koristi poruku iz JSON-a
         return ConversationHandler.END
 
     email_body = f"Novi upit sa Telegram bota:\n\n" \
@@ -83,20 +130,29 @@ async def send_inquiry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         if inquiry_data['sketch_attached'] and inquiry_data['sketch_file_id']:
             file_id = inquiry_data['sketch_file_id']
             telegram_file = await context.bot.get_file(file_id)
-            file_path = f"{file_id}.{telegram_file.file_path.split('.')[-1]}"
+            # Uzimamo ekstenziju iz originalnog imena fajla ako je dostupno, inače koristimo 'bin'
+            file_extension = telegram_file.file_path.split('.')[-1] if telegram_file.file_path else 'bin'
+            file_path = f"{file_id}.{file_extension}"
             await telegram_file.download_to_drive(file_path)
             attachments.append(file_path)
             logger.info(f"Skica preuzeta i biće prikačena: {file_path}")
 
         yag.send(
             to=recipient_email,
-            bcc=admin_bcc_email,
+            # bcc=admin_bcc_email, # Aktiviraj ovu liniju ako imaš ADMIN_BCC_EMAIL u .env i želiš Bcc
             subject=f"Novi upit za ponudu: {inquiry_data.get('country').upper()} - {inquiry_data.get('installation_type').capitalize()}",
             contents=email_body,
             attachments=attachments
         )
         await query.edit_message_text(text=messages["inquiry_sent_success"])
-        logger.info(f"Upit uspešno poslat na {recipient_email} (BCC: {admin_bcc_email}) od korisnika {user_id}.")
+        logger.info(f"Upit uspešno poslat na {recipient_email} od korisnika {user_id}.")
+
+        # Slanje obaveštenja adminima putem Telegrama
+        for admin_id in ADMIN_IDS:
+            try:
+                await context.bot.send_message(chat_id=admin_id, text=f"🔔 *NOVI UPIT* (Email poslat na: `{recipient_email}`)\n\n_{email_body}_", parse_mode='Markdown')
+            except Exception as e:
+                logger.error(f"Greška prilikom slanja Telegram obaveštenja adminu {admin_id}: {e}")
 
         if attachments and os.path.exists(attachments[0]):
             os.remove(attachments[0])
@@ -104,7 +160,7 @@ async def send_inquiry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 
     except Exception as e:
         logger.error(f"Greška prilikom slanja emaila za upit {user_id}: {e}")
-        await query.edit_message_text("Došlo je do greške prilikom slanja upita. Molimo pokušajte ponovo kasnije.")
+        await query.edit_message_text(messages["inquiry_send_error"]) # Koristi poruku iz JSON-a
 
     context.user_data.clear() # Očisti podatke nakon završenog upita
     return ConversationHandler.END
@@ -121,7 +177,7 @@ async def cancel_inquiry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 async def conversation_timeout(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_id = update.effective_user.id
     messages = load_messages(user_data[user_id]['lang'])
-    await context.bot.send_message(chat_id=user_id, text="Vreme za unos je isteklo. Molimo počnite ponovo sa /start.")
+    await context.bot.send_message(chat_id=user_id, text=messages["timeout_message"]) # Koristi poruku iz JSON-a
     context.user_data.clear()
     return ConversationHandler.END
 
@@ -135,11 +191,16 @@ async def get_email(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         context.user_data['inquiry']['contact_email'] = email
         inquiry_data = context.user_data['inquiry']
 
+        # Priprema teksta za potvrdu - dodaj podatke o zemlji i tipu instalacije
         confirm_text = messages["confirm_details"].format(
+            country=inquiry_data.get('country', 'N/A').replace('srbija', messages['srbija_button']).replace('crna_gora', messages['crna_gora_button']), # Prevedi zemlju
+            installation_type=messages.get(f"{inquiry_data.get('installation_type')}_installation_button", 'N/A'), # Prevedi tip instalacije
+            heating_system_type=messages.get(f"{inquiry_data.get('heating_system_type')}_button", 'N/A') if inquiry_data.get('heating_system_type') else 'N/A', # Prevedi sistem grejanja
+            heat_pump_subtype=messages.get(f"{inquiry_data.get('heat_pump_subtype')}_hp_button", 'N/A') if inquiry_data.get('heat_pump_subtype') else 'N/A', # Prevedi podtip TP
             object_type=inquiry_data['object_type'],
             surface_area=inquiry_data['surface_area'],
             num_floors=inquiry_data['num_floors'],
-            sketch_attached=messages["confirm_button"] if inquiry_data['sketch_attached'] else messages["cancel_button"],
+            sketch_attached=messages["yes_text"] if inquiry_data['sketch_attached'] else messages["no_text"], # Koristi yes_text/no_text
             contact_name=inquiry_data['contact_name'],
             contact_phone=inquiry_data['contact_phone'],
             contact_email=inquiry_data['contact_email']
@@ -154,7 +215,7 @@ async def get_email(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         await update.message.reply_text(confirm_text, reply_markup=reply_markup)
         return CONFIRM_DETAILS
     else:
-        await update.message.reply_text("Molimo unesite validnu email adresu.")
+        await update.message.reply_text(messages["invalid_email_format"]) # Koristi poruku iz JSON-a
         return ENTER_EMAIL
 
 async def get_contact_info(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -162,6 +223,8 @@ async def get_contact_info(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     messages = load_messages(user_data[user_id]['lang'])
 
     contact_text = update.message.text
+    # RegEx da uhvati Ime Prezime i Broj Telefona
+    # Omogućava razne formate: "Ime Prezime, +3816x/xxx-xxxx", "Ime Prezime 06x xxx xxxx"
     match = re.match(r"([\w\sčćšđžČĆŠĐŽ.]+),\s*([\d\s\/\+\-]+)", contact_text)
     if match:
         context.user_data['inquiry']['contact_name'] = match.group(1).strip()
@@ -169,7 +232,7 @@ async def get_contact_info(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await update.message.reply_text(messages["request_email"])
         return ENTER_EMAIL
     else:
-        await update.message.reply_text("Format je pogrešan. Molimo unesite Ime Prezime, Telefon (npr. Petar Petrović, 06x/xxx-xxxx).")
+        await update.message.reply_text(messages["invalid_contact_info_format"]) # Koristi poruku iz JSON-a
         return ENTER_CONTACT_INFO
 
 async def get_sketch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -179,17 +242,17 @@ async def get_sketch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if update.message.document:
         context.user_data['inquiry']['sketch_attached'] = True
         context.user_data['inquiry']['sketch_file_id'] = update.message.document.file_id
-        await update.message.reply_text("Skica je primljena.")
+        await update.message.reply_text(messages["sketch_received"]) # Koristi poruku iz JSON-a
     elif update.message.photo:
         context.user_data['inquiry']['sketch_attached'] = True
         context.user_data['inquiry']['sketch_file_id'] = update.message.photo[-1].file_id
-        await update.message.reply_text("Skica (slika) je primljena.")
+        await update.message.reply_text(messages["sketch_received_photo"]) # Koristi poruku iz JSON-a
     ## VAŽNO: Proveravamo da li je tekst "Ne" ili ekvivalent iz json fajla
     elif update.message.text and update.message.text.lower() == messages["no_sketch_text"].lower():
         context.user_data['inquiry']['sketch_attached'] = False
-        await update.message.reply_text("Nema skice.")
+        await update.message.reply_text(messages["no_sketch_provided"]) # Koristi poruku iz JSON-a
     else:
-        await update.message.reply_text("Molimo pošaljite skicu kao sliku/PDF ili pošaljite 'Ne'.")
+        await update.message.reply_text(messages["invalid_sketch_input"]) # Koristi poruku iz JSON-a
         return SEND_SKETCH
 
     await update.message.reply_text(messages["request_contact_info"])
@@ -204,7 +267,7 @@ async def get_num_floors(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.message.reply_text(messages["request_sketch"])
         return SEND_SKETCH
     except ValueError:
-        await update.message.reply_text("Molimo unesite validan broj za spratnost.")
+        await update.message.reply_text(messages["invalid_floor_number"]) # Koristi poruku iz JSON-a
         return ENTER_NUM_FLOORS
 
 async def get_surface_area(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -216,7 +279,7 @@ async def get_surface_area(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await update.message.reply_text(messages["request_number_of_floors"])
         return ENTER_NUM_FLOORS
     except ValueError:
-        await update.message.reply_text("Molimo unesite validan broj za površinu.")
+        await update.message.reply_text(messages["invalid_surface_area"]) # Koristi poruku iz JSON-a
         return ENTER_SURFACE_AREA
 
 async def get_object_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -252,7 +315,16 @@ async def query_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
 async def show_crna_gora_heat_pump_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int) -> None:
     messages = load_messages(user_data[user_id]['lang'])
     await context.bot.send_message(chat_id=user_id, text=messages["crna_gora_heat_pump_intro"])
-    await context.bot.send_message(chat_id=user_id, text=messages["instal_m_info"], parse_mode='Markdown')
+    # Koristi contact_info za info o Instal M
+    crna_gora_contractor = contact_info['crna_gora']['contractor']
+    instal_m_info_text = messages["instal_m_info"].format(
+        name=crna_gora_contractor['name'],
+        phone=crna_gora_contractor['phone'],
+        email=crna_gora_contractor['email'],
+        website=crna_gora_contractor['website'],
+        telegram=crna_gora_contractor['telegram']
+    )
+    await context.bot.send_message(chat_id=user_id, text=instal_m_info_text, parse_mode='Markdown')
     # Direktno započni konverzaciju
     await query_start(update, context)
 
@@ -380,12 +452,45 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         elif menu_option == 'services':
             await query.edit_message_text(text=messages["services_info_button"] + "...")
             # Dalja logika za prikaz usluga
+            # (možeš dodati ovde podatke o uslugama iz nekog rečnika, slično contact_info)
         elif menu_option == 'faq':
             await query.edit_message_text(text=messages["faq_button"] + "...")
             # Dalja logika za FAQ
+            # (možeš dodati ovde FAQ podatke iz nekog rečnika, slično contact_info)
         elif menu_option == 'contact':
-            await query.edit_message_text(text=messages["contact_button"] + "...")
-            # Dalja logika za prikaz kontakta
+            # Implementacija prikaza kontakta koristeći contact_info
+            country = user_data[user_id].get('country')
+            contact_message = messages["contact_info_unavailable"] # Default poruka
+
+            if country == 'srbija':
+                contractor = contact_info['srbija']['contractor']
+                manufacturer = contact_info['srbija']['manufacturer']
+                contact_message = (
+                    f"**{messages['srbija_contractor_info']}**\n"
+                    f"📞: {contractor['phone']}\n"
+                    f"📧: {contractor['email']}\n"
+                    f"🌐: {contractor['website']}\n"
+                    f"✈️: {contractor['telegram']}\n\n"
+                    f"**{messages['srbija_manufacturer_info']}**\n"
+                    f"🏢: {manufacturer['name']}\n"
+                    f"📞: {manufacturer['phone']}\n"
+                    f"📧: {manufacturer['email']}\n"
+                    f"🌐: {manufacturer['website']}\n"
+                    f"✈️: {manufacturer['telegram']}"
+                )
+            elif country == 'crna_gora':
+                contractor = contact_info['crna_gora']['contractor']
+                contact_message = (
+                    f"**{messages['crna_gora_contractor_info']}**\n"
+                    f"🏢: {contractor['name']}\n"
+                    f"📞: {contractor['phone']}\n"
+                    f"📧: {contractor['email']}\n"
+                    f"🌐: {contractor['website']}\n"
+                    f"✈️: {contractor['telegram']}"
+                )
+
+            await query.edit_message_text(text=contact_message, parse_mode='Markdown')
+
 
     elif callback_data.startswith('type_'):
         installation_type = callback_data.split('_')[1]
@@ -426,7 +531,16 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         user_data[user_id]['heat_pump_subtype'] = hp_type
 
         await query.edit_message_text(text=f"{messages[f'{hp_type}_hp_button']} je odabrana.")
-        await query.message.reply_text(messages["microma_info"], parse_mode='Markdown') # Prikazuje info o Micromi
+        # Koristi contact_info za info o Micromi
+        microma_info = contact_info['srbija']['manufacturer']
+        microma_info_text = messages["microma_info"].format(
+            name=microma_info['name'],
+            phone=microma_info['phone'],
+            email=microma_info['email'],
+            website=microma_info['website'],
+            telegram=microma_info['telegram']
+        )
+        await query.message.reply_text(microma_info_text, parse_mode='Markdown') # Prikazuje info o Micromi
 
         # Sada započinjemo konverzaciju za prikupljanje detalja o objektu
         await query_start(update, context)
@@ -460,7 +574,7 @@ def main() -> Application: # Promenjen return type da bi Pylance bio srećan
             CHOOSE_OBJECT_TYPE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_object_type)],
             ENTER_SURFACE_AREA: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_surface_area)],
             ENTER_NUM_FLOORS: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_num_floors)],
-          # Nova, ispravna linija:
+            # Nova, ispravna linija:
             SEND_SKETCH: [MessageHandler(filters.PHOTO | filters.Document.ALL | (filters.TEXT & ~filters.COMMAND), get_sketch)],
             ENTER_CONTACT_INFO: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_contact_info)],
             ENTER_EMAIL: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_email)],
@@ -490,8 +604,8 @@ if __name__ == "__main__":
     if IS_ON_RENDER:
         WEBHOOK_URL = os.getenv("WEBHOOK_URL")
         if not WEBHOOK_URL:
-             logger.critical("Greška: WEBHOOK_URL environment varijabla NIJE podešena za Render deployment!")
-             raise ValueError("WEBHOOK_URL environment varijabla nije pronađena.")
+            logger.critical("Greška: WEBHOOK_URL environment varijabla NIJE podešena za Render deployment!")
+            raise ValueError("WEBHOOK_URL environment varijabla nije pronađena.")
 
         logger.info("Pokrećem bota na Renderu (webhook)...")
         async def setup_webhook():
