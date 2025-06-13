@@ -1,9 +1,6 @@
 import os
-import logging
-import json
-import yagmail
 from dotenv import load_dotenv
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -11,664 +8,740 @@ from telegram.ext import (
     MessageHandler,
     filters,
     ConversationHandler,
+    ContextTypes 
 )
-from telegram.constants import ParseMode
+from telegram.error import BadRequest # Uvezite za rukovanje greskama
+from telegram.constants import ParseMode # Za formatiranje teksta (npr. bold)
+import logging
+import json
+import yagmail # Za slanje emailova
 
-# Load environment variables from .env file
-load_dotenv()
-
-# Enable logging
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
-)
+# Konfiguracija logovanja
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# States for ConversationHandler
-SELECTING_LANGUAGE, SELECTING_COUNTRY, MAIN_MENU, SELECTING_INSTALLATION_TYPE, \
-    SELECTING_HEATING_SYSTEM, SELECTING_HEAT_PUMP_SUBTYPE, REQUESTING_OBJECT_TYPE, \
-    REQUESTING_SURFACE_AREA, REQUESTING_NUM_FLOORS, REQUESTING_SKETCH, \
-    REQUESTING_CONTACT_INFO, REQUESTING_EMAIL, CONFIRMING_DETAILS, SHOWING_CONTACT_INFO = range(14)
+# Učitavanje varijabli okruženja (za lokalni razvoj)
+# Na Renderu, ove varijable su direktno dostupne iz okruženja
+load_dotenv()
 
 # Environment variables
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
-EMAIL_ADDRESS = os.getenv("EMAIL_ADDRESS")
-EMAIL_APP_PASSWORD = os.getenv("EMAIL_APP_PASSWORD")
-ADMIN_EMAIL = os.getenv("ADMIN_EMAIL") # Your email for BCC
+EMAIL_ADDRESS = os.getenv("EMAIL_ADDRESS") # Email za slanje
+EMAIL_APP_PASSWORD = os.getenv("EMAIL_APP_PASSWORD") # Aplikacijska lozinka za email
+ADMIN_EMAIL = os.getenv("ADMIN_EMAIL") # Vaš email za BCC kopije upita
 
-# Directory for sketches
-SKETCH_DIR = "sketches"
-os.makedirs(SKETCH_DIR, exist_ok=True)
+# --- PODACI ZA KONTAKT I ADMINI ---
+contact_info = {
+    'srbija': {
+        # Podaci za IZVOĐAČA RADOVA u Srbiji
+        'contractor': {
+            'name': 'Igor Bošković', # Dodato ime za lakše prepoznavanje
+            'phone': '+381603932566',
+            'email': 'boskovicigor83@gmail.com',
+            'website': 'N/A', # Koristiti N/A ako nema, ili obrisati ključ
+            'telegram': '@IgorNS1983'
+        },
+        # Podaci za PROIZVOĐAČA u Srbiji (za toplotne pumpe)
+        'manufacturer': {
+            'name': 'Microma',
+            'phone': '+38163582068',
+            'email': 'office@microma.rs',
+            'website': 'https://microma.rs',
+            'telegram': 'N/A'
+        }
+    },
+    'crna_gora': {
+        # Podaci za IZVOĐAČA RADOVA u Crnoj Gori (i za HP ovde)
+        'contractor': {
+            'name': 'Instal M',
+            'phone': '+38267423237',
+            'email': 'office@instalm.me',
+            'website': 'N/A',
+            'telegram': '@ivanmujovic'
+        }
+    }
+}
 
-# Load messages from JSON files
+# Telegram ID-ovi admina koji će primati obaveštenja (TVOJ ID TREBA DA BUDE OVDE)
+ADMIN_IDS = [
+    6869162490, # ZAMENI OVO SA SVOJIM TELEGRAM ID-jem
+    # Dodajte još ID-jeva ako je potrebno
+]
+# --- KRAJ PODATAKA ZA KONTAKT I ADMINI ---
+
+
+# Stanja za ConversationHandler
+CHOOSE_LANGUAGE, CHOOSE_COUNTRY, CHOOSE_SERVICE, CHOOSE_HEATING_SYSTEM, \
+INPUT_OBJECT_DETAILS, SEND_INQUIRY_CONFIRMATION, CHOOSE_HP_SYSTEM = range(7)
+
+# Učitavanje poruka iz JSON fajlova
 MESSAGES = {}
-for lang_code in ["sr", "en", "ru"]:
-    with open(f"messages_{lang_code}.json", "r", encoding="utf-8") as f:
-        MESSAGES[lang_code] = json.load(f)
+def load_messages():
+    """Učitava poruke iz JSON fajlova za svaki jezik."""
+    for lang in ['sr', 'en', 'ru']:
+        try:
+            with open(f'messages_{lang}.json', 'r', encoding='utf-8') as f:
+                MESSAGES[lang] = json.load(f)
+        except FileNotFoundError:
+            logger.error(f"messages_{lang}.json not found. Please create it.")
+            MESSAGES[lang] = {} # Prazan rečnik ako fajl ne postoji
+        except json.JSONDecodeError:
+            logger.error(f"Error decoding JSON from messages_{lang}.json. Check for syntax errors.")
+            MESSAGES[lang] = {}
 
+# Pomoćna funkcija za dobijanje poruke na osnovu jezika i ključa
 def get_message(lang_code, key):
-    return MESSAGES.get(lang_code, {}).get(key, MESSAGES["sr"].get(key, "Error: Message not found"))
+    """Vraća poruku za dati ključ na određenom jeziku. Fallback na default poruku."""
+    return MESSAGES.get(lang_code, {}).get(key, f"MISSING_MESSAGE: {key} for {lang_code}")
 
-# --- Helper functions for keyboards ---
+# --- Helper Functions for Keyboards ---
 
-def get_language_keyboard():
+async def get_language_keyboard():
+    """Generiše inline tastaturu za odabir jezika."""
     keyboard = [
-        [InlineKeyboardButton("Srpski 🇷🇸", callback_data="lang_sr")],
-        [InlineKeyboardButton("English 🇬🇧", callback_data="lang_en")],
-        [InlineKeyboardButton("Русский 🇷🇺", callback_data="lang_ru")],
+        [InlineKeyboardButton("Srpski", callback_data="lang_sr")],
+        [InlineKeyboardButton("English", callback_data="lang_en")],
+        [InlineKeyboardButton("Русский", callback_data="lang_ru")]
     ]
     return InlineKeyboardMarkup(keyboard)
 
-def get_country_keyboard(lang_code):
+async def get_country_keyboard(lang_code):
+    """Generiše inline tastaturu za odabir države."""
     keyboard = [
-        [InlineKeyboardButton(get_message(lang_code, "srbija_button"), callback_data="country_srbija")],
-        [InlineKeyboardButton(get_message(lang_code, "crna_gora_button"), callback_data="country_crnagora")],
+        [InlineKeyboardButton(get_message(lang_code, "country_serbia"), callback_data="country_srb")],
+        [InlineKeyboardButton(get_message(lang_code, "country_montenegro"), callback_data="country_mne")],
+        [InlineKeyboardButton(get_message(lang_code, "back_button"), callback_data="back_to_language")]
     ]
     return InlineKeyboardMarkup(keyboard)
 
-def main_menu_markup(lang_code):
+async def get_service_keyboard(lang_code):
+    """Generiše inline tastaturu za odabir usluge."""
     keyboard = [
-        [InlineKeyboardButton(get_message(lang_code, "request_quote_button"), callback_data="main_request_quote")],
-        [InlineKeyboardButton(get_message(lang_code, "faq_button"), callback_data="main_faq")],
-        [InlineKeyboardButton(get_message(lang_code, "contact_button"), callback_data="main_contact")],
+        [InlineKeyboardButton(get_message(lang_code, "service_heating_installation"), callback_data="service_heating")],
+        [InlineKeyboardButton(get_message(lang_code, "service_heat_pump"), callback_data="service_hp")],
+        [InlineKeyboardButton(get_message(lang_code, "back_button"), callback_data="back_to_country")]
     ]
     return InlineKeyboardMarkup(keyboard)
 
-def get_installation_type_keyboard(lang_code):
+async def get_heating_system_keyboard(lang_code, country):
+    """Generiše inline tastaturu za odabir grejnog sistema."""
     keyboard = [
-        [InlineKeyboardButton(get_message(lang_code, "heating_installation_button"), callback_data="inst_heating")],
-        [InlineKeyboardButton(get_message(lang_code, "heat_pump_button"), callback_data="inst_heat_pump")],
-        [InlineKeyboardButton(get_message(lang_code, "back_button"), callback_data="back_to_main_menu")], # Back button
+        [InlineKeyboardButton(get_message(lang_code, "system_radiators"), callback_data="system_radiators")],
+        [InlineKeyboardButton(get_message(lang_code, "system_fan_coils"), callback_data="system_fancoils")],
+        [InlineKeyboardButton(get_message(lang_code, "system_floor_heating"), callback_data="system_floor_heating")],
+        [InlineKeyboardButton(get_message(lang_code, "system_floor_fancoils"), callback_data="system_floor_fancoils")],
+        [InlineKeyboardButton(get_message(lang_code, "system_complete_hp_offer"), callback_data="system_complete_hp_offer")]
     ]
+    keyboard.append([InlineKeyboardButton(get_message(lang_code, "back_button"), callback_data="back_to_service")])
     return InlineKeyboardMarkup(keyboard)
 
-def get_heating_system_keyboard(lang_code, country_code):
-    keyboard = [
-        [InlineKeyboardButton(get_message(lang_code, "radiators_button"), callback_data="hs_radiators")],
-        [InlineKeyboardButton(get_message(lang_code, "fan_coils_button"), callback_data="hs_fan_coils")],
-        [InlineKeyboardButton(get_message(lang_code, "underfloor_heating_button"), callback_data="hs_underfloor")],
-        [InlineKeyboardButton(get_message(lang_code, "underfloor_plus_fan_coils_button"), callback_data="hs_underfloor_plus_fan_coils")],
-    ]
-    if country_code == "srbija":
-        keyboard.append([InlineKeyboardButton(get_message(lang_code, "complete_heat_pump_offer_button"), callback_data="hs_complete_hp")])
-
-    keyboard.append([InlineKeyboardButton(get_message(lang_code, "back_button"), callback_data="back_to_installation_type_selection")]) # Back button
-    return InlineKeyboardMarkup(keyboard)
-
-def get_heat_pump_subtype_keyboard(lang_code, country_code):
+async def get_hp_system_keyboard(lang_code, country):
+    """Generiše inline tastaturu za odabir tipa toplotne pumpe."""
     keyboard = []
-    if country_code == "srbija":
-        keyboard.append([InlineKeyboardButton(get_message(lang_code, "water_water_hp_button"), callback_data="hps_water_water")])
-        keyboard.append([InlineKeyboardButton(get_message(lang_code, "air_water_hp_button"), callback_data="hps_air_water")])
-    elif country_code == "crnagora":
-        keyboard.append([InlineKeyboardButton(get_message(lang_code, "air_water_hp_button"), callback_data="hps_air_water")])
-
-    keyboard.append([InlineKeyboardButton(get_message(lang_code, "back_button"), callback_data="back_to_installation_type_selection")]) # Back button
+    if country == 'srb':
+        keyboard.append([InlineKeyboardButton(get_message(lang_code, "hp_water_water"), callback_data="hp_water_water")])
+        keyboard.append([InlineKeyboardButton(get_message(lang_code, "hp_air_water"), callback_data="hp_air_water")])
+    elif country == 'mne':
+        keyboard.append([InlineKeyboardButton(get_message(lang_code, "hp_air_water"), callback_data="hp_air_water")]) # Samo Vazduh-Voda za CG
+    keyboard.append([InlineKeyboardButton(get_message(lang_code, "back_button"), callback_data="back_to_service")])
     return InlineKeyboardMarkup(keyboard)
 
-def get_confirm_cancel_keyboard(lang_code):
+async def get_send_inquiry_keyboard(lang_code):
+    """Generiše inline tastaturu za potvrdu slanja upita."""
     keyboard = [
-        [InlineKeyboardButton(get_message(lang_code, "confirm_button"), callback_data="confirm_yes")],
-        [InlineKeyboardButton(get_message(lang_code, "cancel_button"), callback_data="confirm_no")],
+        [InlineKeyboardButton(get_message(lang_code, "send_inquiry_yes"), callback_data="send_inquiry_yes")],
+        [InlineKeyboardButton(get_message(lang_code, "send_inquiry_no"), callback_data="send_inquiry_no")]
     ]
+    keyboard.append([InlineKeyboardButton(get_message(lang_code, "back_button"), callback_data="back_to_object_details_keyboard")])
     return InlineKeyboardMarkup(keyboard)
 
-# --- Command Handlers ---
+# --- Email Sending Function ---
+async def send_email(to_email, subject, body, attachment_paths=None):
+    """Šalje email koristeći yagmail."""
+    try:
+        yag = yagmail.SMTP(EMAIL_ADDRESS, EMAIL_APP_PASSWORD)
+        recipients = [to_email]
+        if ADMIN_EMAIL and ADMIN_EMAIL not in recipients: # Dodajte ADMIN_EMAIL kao BCC, ako nije već glavni primalac
+            recipients.append(ADMIN_EMAIL)
 
-async def start(update: Update, context):
-    context.user_data.clear() # Clear user data on start
-    await update.message.reply_text(
-        get_message("sr", "start_message"), # Default to Serbian for initial choice
-        reply_markup=get_language_keyboard()
-    )
-    return SELECTING_LANGUAGE
+        logger.info(f"Attempting to send email to: {to_email}, with BCC to: {ADMIN_EMAIL}")
 
-# --- Callback Handlers ---
+        yag.send(
+            to=recipients,
+            subject=subject,
+            contents=body,
+            attachments=attachment_paths
+        )
+        logger.info(f"Email sent successfully to {to_email} with BCC to {ADMIN_EMAIL}")
+        return True
+    except Exception as e:
+        logger.error(f"Error sending email: {e}")
+        return False
 
-async def select_language(update: Update, context):
+# --- Handlers ---
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Pokreće konverzaciju, nudi odabir jezika."""
+    load_messages() # Učitajte poruke pri svakom startu (za slučaj da se promene)
+    
+    welcome_message = get_message('sr', 'welcome_message') + "\n\n" + \
+                      get_message('en', 'welcome_message') + "\n\n" + \
+                      get_message('ru', 'welcome_message') + "\n\n" + \
+                      get_message('sr', 'choose_language_prompt') + "\n" + \
+                      get_message('en', 'choose_language_prompt') + "\n" + \
+                      get_message('ru', 'choose_language_prompt')
+
+    if update.message:
+        await update.message.reply_text(welcome_message, reply_markup=await get_language_keyboard(), parse_mode=ParseMode.HTML)
+    elif update.callback_query: # Ako se start pozove preko callbacka (npr. nakon cancela)
+        query = update.callback_query
+        await query.answer()
+        try:
+            await query.edit_message_text(welcome_message, reply_markup=await get_language_keyboard(), parse_mode=ParseMode.HTML)
+        except BadRequest as e:
+            logger.warning(f"Error editing message in start (callback): {e}. Sending new message.")
+            await update.effective_chat.send_message(welcome_message, reply_markup=await get_language_keyboard(), parse_mode=ParseMode.HTML)
+
+    context.user_data.clear() # Resetuj sve podatke pri novom startu
+    return CHOOSE_LANGUAGE
+
+async def choose_language(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Obrađuje odabir jezika."""
     query = update.callback_query
     await query.answer()
-    lang_code = query.data.split('_')[1]
+    lang_code = query.data.replace('lang_', '')
     context.user_data['lang'] = lang_code
-    await query.edit_message_text(
-        text=get_message(lang_code, "language_selected"),
-        reply_markup=get_country_keyboard(lang_code)
-    )
-    return SELECTING_COUNTRY
+    
+    # Sakrijte eventualnu ReplyKeyboard (koja se koristi za Nazad)
+    if update.effective_message.reply_markup and isinstance(update.effective_message.reply_markup, ReplyKeyboardMarkup):
+        await update.effective_chat.send_message(get_message(lang_code, "choose_country"), reply_markup=InlineKeyboardMarkup([])) # Pošalji praznu inline tastaturu da se obriše reply tastatura
 
-async def select_country(update: Update, context):
+
+    try:
+        await query.edit_message_text(
+            text=get_message(lang_code, "choose_country"),
+            reply_markup=await get_country_keyboard(lang_code)
+        )
+    except BadRequest as e:
+        logger.warning(f"Error editing message in choose_language: {e}. Sending new message.")
+        await update.effective_chat.send_message(
+            text=get_message(lang_code, "choose_country"),
+            reply_markup=await get_country_keyboard(lang_code)
+        )
+    return CHOOSE_COUNTRY
+
+async def choose_country(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Obrađuje odabir države."""
     query = update.callback_query
     await query.answer()
-    lang_code = context.user_data['lang']
-    country_code = query.data.split('_')[1]
+    country_code = query.data.replace('country_', '')
     context.user_data['country'] = country_code
-
-    # Store display name for country
-    if country_code == "srbija":
-        context.user_data['country_display'] = get_message(lang_code, "srbija_button").replace(" 🇷🇸", "")
-    elif country_code == "crnagora":
-        context.user_data['country_display'] = get_message(lang_code, "crna_gora_button").replace(" 🇲🇪", "")
-
-    await query.edit_message_text(
-        text=get_message(lang_code, "country_selected").format(country_name=context.user_data['country_display']),
-        reply_markup=main_menu_markup(lang_code)
-    )
-    return MAIN_MENU
-
-async def main_menu_action(update: Update, context):
-    query = update.callback_query
-    await query.answer()
     lang_code = context.user_data['lang']
 
-    action = query.data.split('_')[1]
+    country_name = get_message(lang_code, f"country_{country_code}") # Dohvati ime države
+    message_text = get_message(lang_code, "country_selected").format(country_name=country_name)
 
-    if action == "request_quote":
+    try:
         await query.edit_message_text(
-            text=get_message(lang_code, "choose_installation_type"),
-            reply_markup=get_installation_type_keyboard(lang_code)
+            text=message_text + "\n\n" + get_message(lang_code, "choose_service"),
+            reply_markup=await get_service_keyboard(lang_code),
+            parse_mode=ParseMode.HTML # Omogući HTML formatiranje za bold
         )
-        return SELECTING_INSTALLATION_TYPE
-    # "services_info" je uklonjen
-    elif action == "faq":
-        await query.edit_message_text(
-            text=get_message(lang_code, "faq_message"), # Dodaj faq_message u JSON
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(get_message(lang_code, "back_button"), callback_data="back_to_main_menu")]])
+    except BadRequest as e:
+        logger.warning(f"Error editing message in choose_country: {e}. Sending new message.")
+        await update.effective_chat.send_message(
+            text=message_text + "\n\n" + get_message(lang_code, "choose_service"),
+            reply_markup=await get_service_keyboard(lang_code),
+            parse_mode=ParseMode.HTML
         )
-        return MAIN_MENU # Ostavljamo u MAIN_MENU state da se lakse vrati
-    elif action == "contact":
-        return await show_contact_info_step(update, context)
+    return CHOOSE_SERVICE
 
-
-async def select_installation_type(update: Update, context):
+async def choose_service(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Obrađuje odabir usluge (grejna instalacija ili toplotna pumpa)."""
     query = update.callback_query
     await query.answer()
+    service_type = query.data.replace('service_', '')
+    context.user_data['service'] = service_type
     lang_code = context.user_data['lang']
     country_code = context.user_data['country']
-    installation_type_code = query.data.split('_')[1]
-    context.user_data['installation_type'] = installation_type_code
 
-    installation_type_display = ""
-    if installation_type_code == "heating":
-        installation_type_display = get_message(lang_code, "installation_type_heating_text")
-        context.user_data['installation_type_display'] = installation_type_display
+    if service_type == 'heating':
+        # Prikaz podataka o izvođaču za grejnu instalaciju
+        if country_code == 'srb':
+            contractor_data = contact_info['srbija']['contractor']
+        elif country_code == 'mne':
+            contractor_data = contact_info['crna_gora']['contractor']
+        
+        contractor_info_text = get_message(lang_code, "contractor_info").format(
+            name=contractor_data.get('name', 'N/A'),
+            phone=contractor_data.get('phone', 'N/A'),
+            email=contractor_data.get('email', 'N/A'),
+            website=contractor_data.get('website', 'N/A'),
+            telegram=contractor_data.get('telegram', 'N/A')
+        )
+        
+        try:
+            await query.edit_message_text(
+                text=contractor_info_text + "\n\n" + get_message(lang_code, "choose_heating_system"),
+                reply_markup=await get_heating_system_keyboard(lang_code, country_code),
+                parse_mode=ParseMode.HTML
+            )
+        except BadRequest as e:
+            logger.warning(f"Error editing message in choose_service (heating): {e}. Sending new message.")
+            await update.effective_chat.send_message(
+                text=contractor_info_text + "\n\n" + get_message(lang_code, "choose_heating_system"),
+                reply_markup=await get_heating_system_keyboard(lang_code, country_code),
+                parse_mode=ParseMode.HTML
+            )
+        return CHOOSE_HEATING_SYSTEM
+    elif service_type == 'hp':
+        # Prikaz podataka o partneru/proizvođaču za toplotnu pumpu
+        if country_code == 'srb':
+            partner_data = contact_info['srbija']['manufacturer']
+        elif country_code == 'mne':
+            partner_data = contact_info['crna_gora']['contractor'] # Instal M za CG HP
+        
+        partner_info_text = get_message(lang_code, "partner_info").format(
+            name=partner_data.get('name', 'N/A'),
+            phone=partner_data.get('phone', 'N/A'),
+            email=partner_data.get('email', 'N/A'),
+            website=partner_data.get('website', 'N/A'),
+            telegram=partner_data.get('telegram', 'N/A')
+        )
 
-        # Show contractor info based on country
-        if country_code == "srbija":
-            text = get_message(lang_code, "srbija_heating_intro") + "\n\n" + \
-                   get_message(lang_code, "contact_srbija_contractor_display").format(
-                       phone=get_message(lang_code, "contact_info_srbija_contractor_phone"),
-                       email=get_message(lang_code, "contact_info_srbija_contractor_email"),
-                       website=get_message(lang_code, "contact_info_srbija_contractor_website"),
-                       telegram=get_message(lang_code, "contact_info_srbija_contractor_telegram")
-                   )
-            reply_markup = get_heating_system_keyboard(lang_code, country_code)
-            next_state = SELECTING_HEATING_SYSTEM
-        elif country_code == "crnagora":
-            text = get_message(lang_code, "crna_gora_heating_intro") + "\n\n" + \
-                   get_message(lang_code, "contact_crna_gora_contractor_display").format(
-                       name=get_message(lang_code, "contact_info_crna_gora_contractor_name"),
-                       phone=get_message(lang_code, "contact_info_crna_gora_contractor_phone"),
-                       email=get_message(lang_code, "contact_info_crna_gora_contractor_email"),
-                       website=get_message(lang_code, "contact_info_crna_gora_contractor_website"),
-                       telegram=get_message(lang_code, "contact_info_crna_gora_contractor_telegram")
-                   )
-            reply_markup = get_heating_system_keyboard(lang_code, country_code)
-            next_state = SELECTING_HEATING_SYSTEM
-        else:
-            text = get_message(lang_code, "contact_info_not_available")
-            reply_markup = get_installation_type_keyboard(lang_code)
-            next_state = SELECTING_INSTALLATION_TYPE # Stay in current state
+        try:
+            await query.edit_message_text(
+                text=partner_info_text + "\n\n" + get_message(lang_code, "choose_hp_system"),
+                reply_markup=await get_hp_system_keyboard(lang_code, country_code),
+                parse_mode=ParseMode.HTML
+            )
+        except BadRequest as e:
+            logger.warning(f"Error editing message in choose_service (hp): {e}. Sending new message.")
+            await update.effective_chat.send_message(
+                text=partner_info_text + "\n\n" + get_message(lang_code, "choose_hp_system"),
+                reply_markup=await get_hp_system_keyboard(lang_code, country_code),
+                parse_mode=ParseMode.HTML
+            )
+        return CHOOSE_HP_SYSTEM
 
-        await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
-        return next_state
-
-
-    elif installation_type_code == "heat_pump":
-        installation_type_display = get_message(lang_code, "installation_type_heatpump_text")
-        context.user_data['installation_type_display'] = installation_type_display
-        context.user_data['heating_system_type'] = None # Reset heating system type for HP
-
-        # Show manufacturer info based on country
-        if country_code == "srbija":
-            text = get_message(lang_code, "srbija_heat_pump_intro") + "\n\n" + \
-                   get_message(lang_code, "contact_srbija_manufacturer_display").format(
-                       name=get_message(lang_code, "contact_info_srbija_manufacturer_name"),
-                       phone=get_message(lang_code, "contact_info_srbija_manufacturer_phone"),
-                       email=get_message(lang_code, "contact_info_srbija_manufacturer_email"),
-                       website=get_message(lang_code, "contact_info_srbija_manufacturer_website"),
-                       telegram=get_message(lang_code, "contact_info_srbija_manufacturer_telegram")
-                   )
-            reply_markup = get_heat_pump_subtype_keyboard(lang_code, country_code)
-            next_state = SELECTING_HEAT_PUMP_SUBTYPE
-        elif country_code == "crnagora":
-            text = get_message(lang_code, "crna_gora_heat_pump_intro") + "\n\n" + \
-                   get_message(lang_code, "contact_crna_gora_contractor_display").format(
-                       name=get_message(lang_code, "contact_info_crna_gora_contractor_name"),
-                       phone=get_message(lang_code, "contact_info_crna_gora_contractor_phone"),
-                       email=get_message(lang_code, "contact_info_crna_gora_contractor_email"),
-                       website=get_message(lang_code, "contact_info_crna_gora_contractor_website"),
-                       telegram=get_message(lang_code, "contact_info_crna_gora_contractor_telegram")
-                   )
-            reply_markup = get_heat_pump_subtype_keyboard(lang_code, country_code)
-            next_state = SELECTING_HEAT_PUMP_SUBTYPE
-        else:
-            text = get_message(lang_code, "contact_info_not_available")
-            reply_markup = get_installation_type_keyboard(lang_code)
-            next_state = SELECTING_INSTALLATION_TYPE
-
-        await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
-        return next_state
-
-
-async def select_heating_system(update: Update, context):
+async def choose_heating_system(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Obrađuje odabir specifičnog grejnog sistema."""
     query = update.callback_query
     await query.answer()
+    system_type = query.data.replace('system_', '')
+    context.user_data['heating_system'] = system_type
     lang_code = context.user_data['lang']
-    heating_system_code = query.data.split('_')[1]
-    context.user_data['heating_system_type'] = heating_system_code
-    context.user_data['heat_pump_subtype'] = None # Reset HP subtype for heating systems
 
-    # Map codes to display text
-    heating_system_display = get_message(lang_code, f"heating_system_type_{heating_system_code}_text")
-    context.user_data['heating_system_type_display'] = heating_system_display
+    system_name = get_message(lang_code, f"system_{system_type}")
+    
+    # Sakrijte prethodnu inline tastaturu slanjem nove prazne
+    try:
+        await query.edit_message_reply_markup(reply_markup=None) # Uklanja inline tastaturu
+    except BadRequest as e:
+        logger.warning(f"Could not remove inline keyboard: {e}")
 
-    await query.edit_message_text(
-        text=f"{heating_system_display} {get_message(lang_code, 'selected_text')}\n\n" +
-             get_message(lang_code, "request_object_details")
+    # Pošaljite novu poruku sa ReplyKeyboard za Nazad
+    await update.effective_chat.send_message(
+        text=get_message(lang_code, "selected_system").format(system_name=system_name) + "\n\n" + \
+             get_message(lang_code, "input_object_details"),
+        reply_markup=ReplyKeyboardMarkup([[get_message(lang_code, "back_button")]], one_time_keyboard=True, resize_keyboard=True),
+        parse_mode=ParseMode.HTML
     )
-    return REQUESTING_OBJECT_TYPE
+    return INPUT_OBJECT_DETAILS
 
-async def select_heat_pump_subtype(update: Update, context):
+async def choose_hp_system(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Obrađuje odabir tipa toplotne pumpe i prikazuje informacije."""
     query = update.callback_query
     await query.answer()
+    hp_type = query.data.replace('hp_', '')
+    context.user_data['hp_system'] = hp_type
     lang_code = context.user_data['lang']
-    heat_pump_subtype_code = query.data.split('_')[1]
-    context.user_data['heat_pump_subtype'] = heat_pump_subtype_code
-    context.user_data['heating_system_type'] = None # Reset heating system type for HP
+    country_code = context.user_data['country']
 
-    # Map codes to display text
-    heat_pump_subtype_display = get_message(lang_code, f"heat_pump_subtype_{heat_pump_subtype_code}_text")
-    context.user_data['heat_pump_subtype_display'] = heat_pump_subtype_display
-
-    await query.edit_message_text(
-        text=f"{heat_pump_subtype_display} {get_message(lang_code, 'selected_text')}\n\n" +
-             get_message(lang_code, "request_object_details")
+    hp_type_name = get_message(lang_code, f"hp_{hp_type}")
+    
+    # Prikaz podataka o partneru/proizvođaču za toplotnu pumpu (detaljnije informacije)
+    if country_code == 'srb':
+        partner_data = contact_info['srbija']['manufacturer']
+    elif country_code == 'mne':
+        partner_data = contact_info['crna_gora']['contractor'] # Instal M za CG HP
+    
+    partner_info_text_final = get_message(lang_code, "partner_info_final").format(
+        name=partner_data.get('name', 'N/A'),
+        phone=partner_data.get('phone', 'N/A'),
+        email=partner_data.get('email', 'N/A'),
+        website=partner_data.get('website', 'N/A'),
+        telegram=partner_data.get('telegram', 'N/A')
     )
-    return REQUESTING_OBJECT_TYPE
 
-async def request_object_type(update: Update, context):
-    lang_code = context.user_data['lang']
-    context.user_data['object_type'] = update.message.text
-    await update.message.reply_text(get_message(lang_code, "request_surface_area"))
-    return REQUESTING_SURFACE_AREA
-
-async def request_surface_area(update: Update, context):
-    lang_code = context.user_data['lang']
+    # Nema daljeg toka za HP, samo ispis informacija i povratak na glavni meni
     try:
-        surface_area = int(update.message.text)
-        if surface_area <= 0:
-            raise ValueError
-        context.user_data['surface_area'] = surface_area
-        await update.message.reply_text(get_message(lang_code, "request_number_of_floors"))
-        return REQUESTING_NUM_FLOORS
-    except ValueError:
-        await update.message.reply_text(get_message(lang_code, "invalid_surface_area"))
-        return REQUESTING_SURFACE_AREA
+        await query.edit_message_text(
+            text=get_message(lang_code, "selected_hp_type").format(hp_type_name=hp_type_name) + "\n\n" + \
+                 partner_info_text_final + "\n\n" + get_message(lang_code, "main_menu_prompt"),
+            reply_markup=await get_service_keyboard(lang_code), # Vraćanje na izbor usluge
+            parse_mode=ParseMode.HTML
+        )
+    except BadRequest as e:
+        logger.warning(f"Error editing message in choose_hp_system: {e}. Sending new message.")
+        await update.effective_chat.send_message(
+            text=get_message(lang_code, "selected_hp_type").format(hp_type_name=hp_type_name) + "\n\n" + \
+                 partner_info_text_final + "\n\n" + get_message(lang_code, "main_menu_prompt"),
+            reply_markup=await get_service_keyboard(lang_code),
+            parse_mode=ParseMode.HTML
+        )
+    context.user_data.clear() # Resetuj sve podatke
+    context.user_data['lang'] = lang_code # zadrži jezik
+    return ConversationHandler.END # Završi konverzaciju
 
-async def request_num_floors(update: Update, context):
+async def input_object_details(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Prikuplja tekstualne detalje o objektu."""
     lang_code = context.user_data['lang']
-    try:
-        num_floors = int(update.message.text)
-        if num_floors <= 0:
-            raise ValueError
-        context.user_data['num_floors'] = num_floors
-        await update.message.reply_text(get_message(lang_code, "request_sketch"))
-        return REQUESTING_SKETCH
-    except ValueError:
-        await update.message.reply_text(get_message(lang_code, "invalid_floor_number"))
-        return REQUESTING_NUM_FLOORS
 
-async def request_sketch(update: Update, context):
+    if update.message.text == get_message(lang_code, "back_button"):
+        # Ako je korisnik kliknuo "Nazad" na ReplyKeyboard-u
+        return await back_to_heating_system(update, context)
+
+    # Sačuvaj unete detalje o objektu
+    object_description = update.message.text
+    context.user_data['object_details'] = {'description': object_description, 'attachments': []}
+
+    # Ponudi opciju za slanje skice/PDF-a
+    await update.message.reply_text(
+        get_message(lang_code, "send_sketch_prompt"),
+        reply_markup=ReplyKeyboardMarkup([[get_message(lang_code, "no_sketch_button"), get_message(lang_code, "back_button")]], one_time_keyboard=True, resize_keyboard=True),
+        parse_mode=ParseMode.HTML
+    )
+    return SEND_INQUIRY_CONFIRMATION # Prelazimo na sledeće stanje gde čekamo skicu ili potvrdu
+
+async def handle_document_or_no_sketch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Obrađuje primljeni dokument (skicu) ili odabir 'Ne' za skicu."""
     lang_code = context.user_data['lang']
+
+    if 'object_details' not in context.user_data: # Ako se vratimo nazad pa opet ovde, osigurajmo da postoji
+        context.user_data['object_details'] = {'description': 'N/A', 'attachments': []}
+
+    if update.message.text == get_message(lang_code, "back_button"):
+        # Ako je korisnik kliknuo "Nazad" na ReplyKeyboard-u
+        return await back_to_object_details_input(update, context)
+
     if update.message.document:
         file_id = update.message.document.file_id
         file_name = update.message.document.file_name
-        file_path = os.path.join(SKETCH_DIR, file_name)
-        new_file = await context.bot.get_file(file_id)
-        await new_file.download_to_drive(file_path)
-        context.user_data['sketch_path'] = file_path
-        context.user_data['sketch_attached'] = get_message(lang_code, "yes_text")
-        await update.message.reply_text(get_message(lang_code, "request_contact_info"))
-        return REQUESTING_CONTACT_INFO
-    elif update.message.photo:
-        photo_file = await update.message.photo[-1].get_file()
-        file_name = f"sketch_{update.message.from_user.id}_{photo_file.file_id}.jpg"
-        file_path = os.path.join(SKETCH_DIR, file_name)
-        await photo_file.download_to_drive(file_path)
-        context.user_data['sketch_path'] = file_path
-        context.user_data['sketch_attached'] = get_message(lang_code, "yes_text")
-        await update.message.reply_text(get_message(lang_code, "request_contact_info"))
-        return REQUESTING_CONTACT_INFO
-    elif update.message.text and update.message.text.lower() == get_message(lang_code, "no_sketch_text").lower():
-        context.user_data['sketch_path'] = None
-        context.user_data['sketch_attached'] = get_message(lang_code, "no_sketch_provided")
-        await update.message.reply_text(get_message(lang_code, "request_contact_info"))
-        return REQUESTING_CONTACT_INFO
-    else:
-        await update.message.reply_text(get_message(lang_code, "invalid_sketch_input"))
-        return REQUESTING_SKETCH
+        context.user_data['object_details']['attachments'].append({'file_id': file_id, 'file_name': file_name})
+        await update.message.reply_text(get_message(lang_code, "sketch_received"))
+    elif update.message.text == get_message(lang_code, "no_sketch_button"):
+        await update.message.reply_text(get_message(lang_code, "no_sketch_chosen"))
+    
+    # Sakrij ReplyKeyboard
+    await update.message.reply_text(get_message(lang_code, "confirm_send_inquiry"), reply_markup=InlineKeyboardMarkup([]))
 
-async def request_contact_info(update: Update, context):
-    lang_code = context.user_data['lang']
-    contact_info = update.message.text
-    if "," in contact_info:
-        parts = contact_info.split(",", 1)
-        context.user_data['contact_name'] = parts[0].strip()
-        context.user_data['contact_phone'] = parts[1].strip()
-        await update.message.reply_text(get_message(lang_code, "request_email"))
-        return REQUESTING_EMAIL
-    else:
-        await update.message.reply_text(get_message(lang_code, "invalid_contact_info_format"))
-        return REQUESTING_CONTACT_INFO
-
-async def request_email(update: Update, context):
-    lang_code = context.user_data['lang']
-    email = update.message.text
-    if "@" in email and "." in email: # Basic email validation
-        context.user_data['contact_email'] = email
-        return await confirm_details(update, context)
-    else:
-        await update.message.reply_text(get_message(lang_code, "invalid_email_format"))
-        return REQUESTING_EMAIL
-
-async def confirm_details(update: Update, context):
-    lang_code = context.user_data['lang']
-    user_data = context.user_data
-
-    # Prepare display names, handling cases where they might not be set
-    country_display = user_data.get('country_display', get_message(lang_code, 'contact_info_not_available'))
-    installation_type_display = user_data.get('installation_type_display', get_message(lang_code, 'contact_info_not_available'))
-    heating_system_type_display = user_data.get('heating_system_type_display', get_message(lang_code, 'contact_info_not_available'))
-    heat_pump_subtype_display = user_data.get('heat_pump_subtype_display', get_message(lang_code, 'contact_info_not_available'))
-
-    # If heating system was chosen, set heat_pump_subtype_display to N/A
-    if user_data.get('heating_system_type'):
-        heat_pump_subtype_display = get_message(lang_code, 'no_sketch_provided') # Koristimo ovu poruku za "N/A"
-    # If heat pump was chosen, set heating_system_type_display to N/A
-    elif user_data.get('heat_pump_subtype'):
-        heating_system_type_display = get_message(lang_code, 'no_sketch_provided') # Koristimo ovu poruku za "N/A"
-    else:
-        # Default to N/A if neither was explicitly chosen yet (shouldn't happen in proper flow)
-        heating_system_type_display = get_message(lang_code, 'no_sketch_provided')
-        heat_pump_subtype_display = get_message(lang_code, 'no_sketch_provided')
-
-    confirmation_text = get_message(lang_code, "confirm_details").format(
-        country=country_display,
-        installation_type=installation_type_display,
-        heating_system_type=heating_system_type_display,
-        heat_pump_subtype=heat_pump_subtype_display,
-        object_type=user_data.get('object_type', 'N/A'),
-        surface_area=user_data.get('surface_area', 'N/A'),
-        num_floors=user_data.get('num_floors', 'N/A'),
-        sketch_attached=user_data.get('sketch_attached', get_message(lang_code, 'no_sketch_provided')),
-        contact_name=user_data.get('contact_name', 'N/A'),
-        contact_phone=user_data.get('contact_phone', 'N/A'),
-        contact_email=user_data.get('contact_email', 'N/A')
+    # Pitajte korisnika da li zeli da posalje upit
+    await update.effective_chat.send_message(
+        get_message(lang_code, "confirm_send_inquiry"),
+        reply_markup=await get_send_inquiry_keyboard(lang_code),
+        parse_mode=ParseMode.HTML
     )
+    return SEND_INQUIRY_CONFIRMATION
 
-    if update.callback_query: # From back button to confirmation
-        await update.callback_query.edit_message_text(
-            text=confirmation_text,
-            reply_markup=get_confirm_cancel_keyboard(lang_code)
-        )
-    else: # First time entering confirmation
-        await update.message.reply_text(
-            text=confirmation_text,
-            reply_markup=get_confirm_cancel_keyboard(lang_code)
-        )
-    return CONFIRMING_DETAILS
-
-async def final_confirm(update: Update, context):
+async def send_inquiry_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Potvrđuje i šalje upit emailom."""
     query = update.callback_query
     await query.answer()
     lang_code = context.user_data['lang']
-    if query.data == "confirm_yes":
-        await send_inquiry_email(context)
-        await query.edit_message_text(get_message(lang_code, "inquiry_sent_success"))
-        context.user_data.clear() # Clear data after successful sending
-        return ConversationHandler.END
-    else: # confirm_no or cancel
-        await query.edit_message_text(get_message(lang_code, "inquiry_canceled"))
-        context.user_data.clear()
-        return ConversationHandler.END
 
-async def send_inquiry_email(context):
-    user_data = context.user_data
-    lang_code = user_data['lang']
+    if query.data == "send_inquiry_yes":
+        country_code = context.user_data.get('country')
+        heating_system_key = context.user_data.get('heating_system')
+        object_details = context.user_data.get('object_details', {})
+        user_info = update.effective_user # Informacije o korisniku
 
-    country_display = user_data.get('country_display', 'N/A')
-    installation_type_display = user_data.get('installation_type_display', 'N/A')
-    heating_system_type_display = user_data.get('heating_system_type_display', 'N/A')
-    heat_pump_subtype_display = user_data.get('heat_pump_subtype_display', 'N/A')
+        # Odredite kome se šalje email i dobijte ime sistema za subject
+        to_email = ""
+        contractor_name = ""
+        
+        system_name_for_email = get_message(lang_code, f"system_{heating_system_key}") # Ime sistema za subject
 
-    # Determine recipient email based on selected country and installation type
-    recipient_email = None
-    if user_data.get('country') == 'srbija':
-        if user_data.get('installation_type') == 'heating':
-            recipient_email = get_message('sr', 'contact_info_srbija_contractor_email') # Igor Bošković
-        elif user_data.get('installation_type') == 'heat_pump':
-            recipient_email = get_message('sr', 'contact_info_srbija_manufacturer_email') # Microma
-    elif user_data.get('country') == 'crnagora':
-        recipient_email = get_message('sr', 'contact_info_crna_gora_contractor_email') # Instal M (for both heating and HP)
+        if country_code == 'srb':
+            to_email = contact_info['srbija']['contractor']['email']
+            contractor_name = contact_info['srbija']['contractor']['name']
+        elif country_code == 'mne':
+            to_email = contact_info['crna_gora']['contractor']['email']
+            contractor_name = contact_info['crna_gora']['contractor']['name']
+        
+        subject = get_message(lang_code, "inquiry_subject").format(system=system_name_for_email)
+        body = get_message(lang_code, "inquiry_body").format(
+            user_name=user_info.full_name or user_info.username or "N/A",
+            user_id=user_info.id,
+            country=get_message(lang_code, f"country_{country_code}"),
+            system=system_name_for_email,
+            object_description=object_details.get('description', 'N/A')
+        )
 
-    if not recipient_email:
-        logger.error("No recipient email found for the selected options.")
-        return # Do not attempt to send if no recipient
+        attachments_paths = []
+        if object_details.get('attachments'):
+            for attachment_info in object_details['attachments']:
+                file_id = attachment_info['file_id']
+                file_name = attachment_info['file_name']
+                
+                temp_file_path = f"/tmp/{file_name}" # Render omogucava pisanje u /tmp
+                try:
+                    file = await context.bot.get_file(file_id)
+                    await file.download_to_drive(temp_file_path)
+                    attachments_paths.append(temp_file_path)
+                except Exception as e:
+                    logger.error(f"Failed to download file {file_name}: {e}")
+                    await query.message.reply_text(get_message(lang_code, "attachment_download_failure").format(file_name=file_name), parse_mode=ParseMode.HTML)
 
-    # Construct email subject
-    email_subject = get_message(lang_code, "email_subject").format(
-        country_display=country_display,
-        installation_type_display=installation_type_display
-    )
+        email_sent = await send_email(to_email, subject, body, attachments_paths)
 
-    # Construct email body
-    body = get_message(lang_code, "confirm_details").format(
-        country=country_display,
-        installation_type=installation_type_display,
-        heating_system_type=heating_system_type_display if user_data.get('heating_system_type') else 'N/A',
-        heat_pump_subtype=heat_pump_subtype_display if user_data.get('heat_pump_subtype') else 'N/A',
-        object_type=user_data.get('object_type', 'N/A'),
-        surface_area=user_data.get('surface_area', 'N/A'),
-        num_floors=user_data.get('num_floors', 'N/A'),
-        sketch_attached=user_data.get('sketch_attached', get_message(lang_code, 'no_sketch_provided')),
-        contact_name=user_data.get('contact_name', 'N/A'),
-        contact_phone=user_data.get('contact_phone', 'N/A'),
-        contact_email=user_data.get('contact_email', 'N/A')
-    )
+        if email_sent:
+            await query.edit_message_text(get_message(lang_code, "inquiry_sent_success").format(contractor=contractor_name), parse_mode=ParseMode.HTML)
+        else:
+            await query.edit_message_text(get_message(lang_code, "inquiry_sent_failure"), parse_mode=ParseMode.HTML)
 
-    attachments = []
-    if user_data.get('sketch_path'):
-        attachments.append(user_data['sketch_path'])
+        # Čišćenje privremenih fajlova
+        for path in attachments_paths:
+            if os.path.exists(path):
+                try:
+                    os.remove(path)
+                except OSError as e:
+                    logger.error(f"Error removing temporary file {path}: {e}")
+        
+        context.user_data.clear() # Resetuj sve podatke
+        context.user_data['lang'] = lang_code # zadrzi jezik
+        return ConversationHandler.END # Završi konverzaciju
 
+    elif query.data == "send_inquiry_no":
+        try:
+            await query.edit_message_text(get_message(lang_code, "inquiry_cancelled"), parse_mode=ParseMode.HTML)
+        except BadRequest as e:
+            logger.warning(f"Error editing message in send_inquiry_no: {e}. Sending new message.")
+            await update.effective_chat.send_message(get_message(lang_code, "inquiry_cancelled"), parse_mode=ParseMode.HTML)
+
+        context.user_data.clear() # Resetuj sve podatke
+        context.user_data['lang'] = lang_code # zadrzi jezik
+        return ConversationHandler.END # Završi konverzaciju
+
+# --- Back Handlers ---
+
+async def back_to_language(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Vraća na izbor jezika."""
+    query = update.callback_query
+    await query.answer()
+    
+    await start(update, context) # Pozovi start handler direktno
+    context.user_data.clear() # Resetuj sve podatke
+    return CHOOSE_LANGUAGE
+
+async def back_to_country(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Vraća na izbor države."""
+    query = update.callback_query
+    await query.answer()
+    lang_code = context.user_data.get('lang', 'sr')
+    context.user_data['country'] = None # Reset
+    
     try:
-        yag = yagmail.SMTP(EMAIL_ADDRESS, EMAIL_APP_PASSWORD)
-        yag.send(
-            to=recipient_email,
-            bcc=ADMIN_EMAIL, # Send BCC copy to admin
-            subject=email_subject,
-            contents=body,
-            attachments=attachments
+        await query.edit_message_text(
+            text=get_message(lang_code, "choose_country"),
+            reply_markup=await get_country_keyboard(lang_code),
+            parse_mode=ParseMode.HTML
         )
-        logger.info(f"Email sent successfully to {recipient_email} with BCC to {ADMIN_EMAIL}")
-
-        # Clean up sketch file after sending email
-        if user_data.get('sketch_path') and os.path.exists(user_data['sketch_path']):
-            os.remove(user_data['sketch_path'])
-            logger.info(f"Deleted sketch file: {user_data['sketch_path']}")
-
-    except Exception as e:
-        logger.error(f"Failed to send email: {e}")
-        # Optionally, inform the user about the error
-
-async def show_contact_info_step(update: Update, context):
-    query = update.callback_query
-    lang_code = context.user_data['lang']
-    country_code = context.user_data.get('country') # Get current country
-
-    contact_message = get_message(lang_code, "contact_info_not_available")
-    if country_code == "srbija":
-        contact_message = get_message(lang_code, "contact_srbija_contractor_display").format(
-            phone=get_message(lang_code, "contact_info_srbija_contractor_phone"),
-            email=get_message(lang_code, "contact_info_srbija_contractor_email"),
-            website=get_message(lang_code, "contact_info_srbija_contractor_website"),
-            telegram=get_message(lang_code, "contact_info_srbija_contractor_telegram")
-        ) + "\n\n" + get_message(lang_code, "contact_srbija_manufacturer_display").format(
-            name=get_message(lang_code, "contact_info_srbija_manufacturer_name"),
-            phone=get_message(lang_code, "contact_info_srbija_manufacturer_phone"),
-            email=get_message(lang_code, "contact_info_srbija_manufacturer_email"),
-            website=get_message(lang_code, "contact_info_srbija_manufacturer_website"),
-            telegram=get_message(lang_code, "contact_info_srbija_manufacturer_telegram")
+    except BadRequest as e:
+        logger.warning(f"Error editing message in back_to_country: {e}. Sending new message.")
+        await update.effective_chat.send_message(
+            text=get_message(lang_code, "choose_country"),
+            reply_markup=await get_country_keyboard(lang_code),
+            parse_mode=ParseMode.HTML
         )
-    elif country_code == "crnagora":
-        contact_message = get_message(lang_code, "contact_crna_gora_contractor_display").format(
-            name=get_message(lang_code, "contact_info_crna_gora_contractor_name"),
-            phone=get_message(lang_code, "contact_info_crna_gora_contractor_phone"),
-            email=get_message(lang_code, "contact_info_crna_gora_contractor_email"),
-            website=get_message(lang_code, "contact_info_crna_gora_contractor_website"),
-            telegram=get_message(lang_code, "contact_info_crna_gora_contractor_telegram")
+    return CHOOSE_COUNTRY
+
+async def back_to_service(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Vraća na izbor usluge (grejna instalacija/toplotna pumpa)."""
+    query = update.callback_query
+    await query.answer()
+    lang_code = context.user_data.get('lang', 'sr')
+    context.user_data['service'] = None # Reset
+    
+    try:
+        await query.edit_message_text(
+            text=get_message(lang_code, "choose_service"),
+            reply_markup=await get_service_keyboard(lang_code),
+            parse_mode=ParseMode.HTML
         )
+    except BadRequest as e:
+        logger.warning(f"Error editing message in back_to_service: {e}. Sending new message.")
+        await update.effective_chat.send_message(
+            text=get_message(lang_code, "choose_service"),
+            reply_markup=await get_service_keyboard(lang_code),
+            parse_mode=ParseMode.HTML
+        )
+    return CHOOSE_SERVICE
 
-    await query.edit_message_text(
-        text=contact_message,
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(get_message(lang_code, "back_button"), callback_data="back_to_main_menu")]])
+async def back_to_heating_system(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Vraća na izbor grejnog sistema. Poziva se sa ReplyKeyboard 'Nazad'."""
+    lang_code = context.user_data.get('lang', 'sr')
+    country_code = context.user_data.get('country')
+    context.user_data['heating_system'] = None # Reset
+    
+    # Prikaz podataka o izvođaču za grejnu instalaciju (ponovo)
+    if country_code == 'srb':
+        contractor_data = contact_info['srbija']['contractor']
+    elif country_code == 'mne':
+        contractor_data = contact_info['crna_gora']['contractor']
+    
+    contractor_info_text = get_message(lang_code, "contractor_info").format(
+        name=contractor_data.get('name', 'N/A'),
+        phone=contractor_data.get('phone', 'N/A'),
+        email=contractor_data.get('email', 'N/A'),
+        website=contractor_data.get('website', 'N/A'),
+        telegram=contractor_data.get('telegram', 'N/A')
     )
-    return MAIN_MENU # Stay in MAIN_MENU state to allow easy return
 
-# --- Back Button Handlers ---
+    await update.message.reply_text( # Šaljemo novu poruku jer je ReplyKeyboard
+        text=contractor_info_text + "\n\n" + get_message(lang_code, "choose_heating_system"),
+        reply_markup=await get_heating_system_keyboard(lang_code, country_code),
+        parse_mode=ParseMode.HTML
+    )
+    return CHOOSE_HEATING_SYSTEM
 
-async def back_to_main_menu(update: Update, context):
+async def back_to_object_details_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Vraća na unos detalja o objektu. Poziva se sa ReplyKeyboard 'Nazad'."""
+    lang_code = context.user_data.get('lang', 'sr')
+    system_type = context.user_data.get('heating_system')
+    system_name = get_message(lang_code, f"system_{system_type}")
+    context.user_data['object_details'] = {} # Reset object details (ako se vraćamo, želimo da resetujemo unete detalje)
+
+    await update.message.reply_text( # Šaljemo novu poruku jer je ReplyKeyboard
+        text=get_message(lang_code, "selected_system").format(system_name=system_name) + "\n\n" + \
+             get_message(lang_code, "input_object_details"),
+        reply_markup=ReplyKeyboardMarkup([[get_message(lang_code, "back_button")]], one_time_keyboard=True, resize_keyboard=True),
+        parse_mode=ParseMode.HTML
+    )
+    return INPUT_OBJECT_DETAILS
+
+async def back_to_object_details_keyboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Vraća sa ekrana za potvrdu slanja upita na unos detalja o objektu. Poziva se sa InlineKeyboard 'Nazad'."""
     query = update.callback_query
     await query.answer()
-    lang_code = context.user_data['lang']
-    await query.edit_message_text(
-        text=get_message(lang_code, "back_to_main_menu") + "\n" + get_message(lang_code, "main_menu_greeting"),
-        reply_markup=main_menu_markup(lang_code)
-    )
-    return MAIN_MENU
+    lang_code = context.user_data.get('lang', 'sr')
 
-async def back_to_country_selection(update: Update, context):
-    query = update.callback_query
-    await query.answer()
-    lang_code = context.user_data['lang']
-    await query.edit_message_text(
-        text=get_message(lang_code, "back_to_country_selection") + "\n" + get_message(lang_code, "choose_country"),
-        reply_markup=get_country_keyboard(lang_code)
-    )
-    return SELECTING_COUNTRY
+    # Editujemo poruku koja je pitala za slanje skice i nudimo povratak na unos teksta/slanje skice
+    try:
+        await query.edit_message_text(
+            text=get_message(lang_code, "send_sketch_prompt"),
+            reply_markup=ReplyKeyboardMarkup([[get_message(lang_code, "no_sketch_button"), get_message(lang_code, "back_button")]], one_time_keyboard=True, resize_keyboard=True),
+            parse_mode=ParseMode.HTML
+        )
+    except BadRequest as e:
+        logger.warning(f"Error editing message in back_to_object_details_keyboard: {e}. Sending new message.")
+        await update.effective_chat.send_message(
+            text=get_message(lang_code, "send_sketch_prompt"),
+            reply_markup=ReplyKeyboardMarkup([[get_message(lang_code, "no_sketch_button"), get_message(lang_code, "back_button")]], one_time_keyboard=True, resize_keyboard=True),
+            parse_mode=ParseMode.HTML
+        )
+    return SEND_INQUIRY_CONFIRMATION # Vraćamo se na stanje gde se prikuplja skica/potvrda
 
-async def back_to_installation_type_selection(update: Update, context):
-    query = update.callback_query
-    await query.answer()
-    lang_code = context.user_data['lang']
-    await query.edit_message_text(
-        text=get_message(lang_code, "back_to_installation_type_selection") + "\n" + get_message(lang_code, "choose_installation_type"),
-        reply_markup=get_installation_type_keyboard(lang_code)
-    )
-    return SELECTING_INSTALLATION_TYPE
+# --- Fallback handler ---
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Otkazuje konverzaciju."""
+    lang_code = context.user_data.get('lang', 'sr')
+    if update.message:
+        await update.message.reply_text(get_message(lang_code, "conversation_cancelled"), reply_markup=ReplyKeyboardMarkup([["/start"]], resize_keyboard=True), parse_mode=ParseMode.HTML)
+    elif update.callback_query:
+        query = update.callback_query
+        await query.answer()
+        try:
+            await query.edit_message_text(get_message(lang_code, "conversation_cancelled"), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("/start", callback_data="start_again")]]), parse_mode=ParseMode.HTML)
+        except BadRequest:
+             await update.effective_chat.send_message(get_message(lang_code, "conversation_cancelled"), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("/start", callback_data="start_again")]]), parse_mode=ParseMode.HTML)
 
-async def back_to_heating_system_selection(update: Update, context):
-    query = update.callback_query
-    await query.answer()
-    lang_code = context.user_data['lang']
-    country_code = context.user_data['country'] # Need country to correctly display heating systems
-    await query.edit_message_text(
-        text=get_message(lang_code, "back_to_heating_system_selection") + "\n\n" + get_message(lang_code, "choose_heating_system"),
-        reply_markup=get_heating_system_keyboard(lang_code, country_code)
-    )
-    return SELECTING_HEATING_SYSTEM
+    context.user_data.clear() # Clear all user data
+    return ConversationHandler.END
 
-async def back_to_heat_pump_subtype_selection(update: Update, context):
-    query = update.callback_query
-    await query.answer()
-    lang_code = context.user_data['lang']
-    country_code = context.user_data['country'] # Need country to correctly display HP subtypes
-    await query.edit_message_text(
-        text=get_message(lang_code, "back_to_heat_pump_subtype_selection") + "\n\n" + get_message(lang_code, "select_heat_pump_subtype"),
-        reply_markup=get_heat_pump_subtype_keyboard(lang_code, country_code)
-    )
-    return SELECTING_HEAT_PUMP_SUBTYPE
 
 # --- Main function ---
-
 def main():
+    """Glavna funkcija za pokretanje bota."""
+    load_messages() # Učitaj poruke jednom kada se aplikacija pokrene
+
     application = Application.builder().token(BOT_TOKEN).build()
 
+    # Dohvati PORT koji Render dodeljuje i WEB_SERVICE_URL
+    PORT = int(os.environ.get('PORT', 8080))
+    WEB_SERVICE_URL = os.environ.get('WEB_SERVICE_URL')
+
     conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("start", start)],
+        entry_points=[
+            CommandHandler("start", start),
+            CallbackQueryHandler(start, pattern="^start_again$") # Omogućava restart sa inline dugmeta
+        ],
         states={
-            SELECTING_LANGUAGE: [
-                CallbackQueryHandler(select_language, pattern="^lang_"),
+            CHOOSE_LANGUAGE: [
+                CallbackQueryHandler(choose_language, pattern="^lang_"),
             ],
-            SELECTING_COUNTRY: [
-                CallbackQueryHandler(select_country, pattern="^country_"),
-                CallbackQueryHandler(back_to_main_menu, pattern="^back_to_main_menu$") # Add back button
+            CHOOSE_COUNTRY: [
+                CallbackQueryHandler(choose_country, pattern="^country_"),
+                CallbackQueryHandler(back_to_language, pattern="^back_to_language$")
             ],
-            MAIN_MENU: [
-                CallbackQueryHandler(main_menu_action, pattern="^main_"),
-                CallbackQueryHandler(select_country, pattern="^country_"), # Keep for contact info
+            CHOOSE_SERVICE: [
+                CallbackQueryHandler(choose_service, pattern="^service_"),
+                CallbackQueryHandler(back_to_country, pattern="^back_to_country$")
             ],
-            SELECTING_INSTALLATION_TYPE: [
-                CallbackQueryHandler(select_installation_type, pattern="^inst_"),
-                CallbackQueryHandler(back_to_main_menu, pattern="^back_to_main_menu$") # Add back button
+            CHOOSE_HEATING_SYSTEM: [
+                CallbackQueryHandler(choose_heating_system, pattern="^system_"),
+                CallbackQueryHandler(back_to_service, pattern="^back_to_service$")
             ],
-            SELECTING_HEATING_SYSTEM: [
-                CallbackQueryHandler(select_heating_system, pattern="^hs_"),
-                CallbackQueryHandler(back_to_installation_type_selection, pattern="^back_to_installation_type_selection$") # Add back button
+            CHOOSE_HP_SYSTEM: [
+                CallbackQueryHandler(choose_hp_system, pattern="^hp_"),
+                CallbackQueryHandler(back_to_service, pattern="^back_to_service$")
             ],
-            SELECTING_HEAT_PUMP_SUBTYPE: [
-                CallbackQueryHandler(select_heat_pump_subtype, pattern="^hps_"),
-                CallbackQueryHandler(back_to_installation_type_selection, pattern="^back_to_installation_type_selection$") # Add back button
+            INPUT_OBJECT_DETAILS: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, input_object_details),
+                # Koristimo filters.Regex za back dugme sa ReplyKeyboard-a, mora da pokriva sve jezike
+                MessageHandler(
+                    filters.Regex(f"^{MESSAGES['sr'].get('back_button', 'MISSING_BUTTON')}$|^" + \
+                                  f"{MESSAGES['en'].get('back_button', 'MISSING_BUTTON')}$|^" + \
+                                  f"{MESSAGES['ru'].get('back_button', 'MISSING_BUTTON')}$"), back_to_heating_system
+                )
             ],
-            REQUESTING_OBJECT_TYPE: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, request_object_type),
-                CallbackQueryHandler(back_to_heating_system_selection, pattern="^back_to_heating_system_selection$"), # Back from object type to heating/hp choice
-                CallbackQueryHandler(back_to_heat_pump_subtype_selection, pattern="^back_to_heat_pump_subtype_selection$") # Back from object type to heating/hp choice
+            SEND_INQUIRY_CONFIRMATION: [
+                MessageHandler(
+                    filters.ATTACHMENT | filters.Regex(f"^{MESSAGES['sr'].get('no_sketch_button', 'MISSING_BUTTON')}$|^" + \
+                                                       f"{MESSAGES['en'].get('no_sketch_button', 'MISSING_BUTTON')}$|^" + \
+                                                       f"{MESSAGES['ru'].get('no_sketch_button', 'MISSING_BUTTON')}$"), handle_document_or_no_sketch
+                ),
+                CallbackQueryHandler(send_inquiry_confirmation, pattern="^send_inquiry_"),
+                CallbackQueryHandler(back_to_object_details_keyboard, pattern="^back_to_object_details_keyboard$"),
+                # Dodati MessageHandler za "Nazad" dugme na ReplyKeyboard (koje se koristi pri slanju skice)
+                MessageHandler(
+                    filters.Regex(f"^{MESSAGES['sr'].get('back_button', 'MISSING_BUTTON')}$|^" + \
+                                  f"{MESSAGES['en'].get('back_button', 'MISSING_BUTTON')}$|^" + \
+                                  f"{MESSAGES['ru'].get('back_button', 'MISSING_BUTTON')}$"), handle_document_or_no_sketch # Ovo ce uhvatiti "Nazad" sa ReplyKB
+                )
             ],
-            REQUESTING_SURFACE_AREA: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, request_surface_area),
-                CallbackQueryHandler(confirm_details, pattern="^back_to_confirm_details$") # Placeholder for going back
-            ],
-            REQUESTING_NUM_FLOORS: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, request_num_floors),
-                CallbackQueryHandler(confirm_details, pattern="^back_to_confirm_details$") # Placeholder for going back
-            ],
-            REQUESTING_SKETCH: [
-                MessageHandler(filters.PHOTO | filters.Document.ALL & ~filters.COMMAND | filters.TEXT & ~filters.COMMAND, request_sketch),
-                CallbackQueryHandler(confirm_details, pattern="^back_to_confirm_details$") # Placeholder for going back
-            ],
-            REQUESTING_CONTACT_INFO: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, request_contact_info),
-                CallbackQueryHandler(confirm_details, pattern="^back_to_confirm_details$") # Placeholder for going back
-            ],
-            REQUESTING_EMAIL: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, request_email),
-                CallbackQueryHandler(confirm_details, pattern="^back_to_confirm_details$") # Placeholder for going back
-            ],
-            CONFIRMING_DETAILS: [
-                CallbackQueryHandler(final_confirm, pattern="^confirm_"),
-                CallbackQueryHandler(request_object_type, pattern="^back_to_object_type$"), # Go back from confirmation to object type
-            ],
-            SHOWING_CONTACT_INFO: [
-                CallbackQueryHandler(back_to_main_menu, pattern="^back_to_main_menu$")
-            ]
         },
-        fallbacks=[CommandHandler("start", start)],
+        fallbacks=[CommandHandler("cancel", cancel)],
     )
 
     application.add_handler(conv_handler)
-    # This bot runs in polling mode
-    logger.info("Pokrećem bota u lokalnom modu (polling)...")
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+
+    # Pokretanje bota
+    if WEB_SERVICE_URL:
+        # Produkcijski mod (Render)
+        webhook_url = f"{WEB_SERVICE_URL}/{BOT_TOKEN}"
+        logger.info(f"Pokušavam da postavim webhook na: {webhook_url}")
+        application.run_webhook(
+            listen="0.0.0.0",
+            port=PORT,
+            url_path=BOT_TOKEN, # Vaš TOKEN kao putanja za endpoint
+            webhook_url=webhook_url
+        )
+        logger.info("Bot pokrenut u produkcijskom modu (webhooks).")
+    else:
+        # Lokalni mod (polling)
+        logger.info("Bot pokrenut u lokalnom modu (polling)...")
+        application.run_polling(poll_interval=1.0) # Dodat poll_interval za PTB 20.x
 
 if __name__ == "__main__":
     main()
