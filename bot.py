@@ -2,7 +2,7 @@ import os
 import logging
 import json
 import yagmail
-from dotenv import load_dotenv
+from dotenv import load_dotenv # Zadržite ovo za lokalni razvoj. Na Renderu se ove varijable setuju direktno u dashboardu.
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -12,41 +12,44 @@ from telegram.ext import (
     MessageHandler,
     filters,
     ConversationHandler,
-    ContextTypes # Uvezeno za rešavanje "ContextTypes is not defined" greške
+    ContextTypes
 )
 from telegram.error import TelegramError # Uvezeno za rukovanje Telegram greškama
 
-# Omogući logovanje
+# --- Podešavanje logovanja ---
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
-logging.getLogger("httpx").setLevel(logging.WARNING) # Smanji logovanje za httpx
+logging.getLogger("httpx").setLevel(logging.WARNING) # Smanji logovanje za httpx biblioteku
 logger = logging.getLogger(__name__)
 
-# Učitaj varijable okruženja iz .env fajla (koristi se samo lokalno)
-# Na Renderu se ove varijable setuju direktno u dashboardu
+# --- Učitavanje varijabli okruženja iz .env fajla (koristi se samo lokalno) ---
+# Na Renderu se ove varijable (BOT_TOKEN, EMAIL_ADDRESS, itd.) setuju direktno u Render dashboardu.
 load_dotenv()
 
-# Environment variables
+# --- Varijable okruženja (MORAJU se poklapati sa nazivima i vrednostima na Render dashboardu) ---
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 EMAIL_ADDRESS = os.getenv("EMAIL_ADDRESS")
 EMAIL_APP_PASSWORD = os.getenv("EMAIL_APP_PASSWORD")
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL")
 
-# Dodatne varijable za Render deployment
+# --- Dodatne varijable za Render deployment - OVO SU KRITIČNE LINIJE! ---
+# WEB_SERVICE_URL: Render automatski postavlja ovu varijablu sa URL-om vašeg servisa.
 WEB_SERVICE_URL = os.getenv('WEB_SERVICE_URL')
-PORT = int(os.environ.get('PORT', 8080)) # Render uvek dodeljuje port, obično 8080
-# KLJUČNO: ON_RENDER proverava da li je varijabla okruženja "ON_RENDER" postavljena na "true" (mala slova)
-ON_RENDER = os.getenv("ON_RENDER", "false").lower() == "true"
+# PORT: Render dodeljuje port na kojem vaša aplikacija treba da sluša, obično 8080.
+PORT = int(os.environ.get('PORT', 8080))
+# ON_RENDER: Ova varijabla je KLJUČNA. Proverava da li je varijabla okruženja "ON_RENDER" postavljena na "true" (mala slova).
+# Ako je 'true', bot će se pokrenuti u webhook modu. U suprotnom (npr. lokalno), pokreće se u polling modu.
+ON_RENDER = os.getenv("ON_RENDER", "false").lower() == "true" # Vrednost "false" je default ako varijabla nije postavljena
 
-# Stanja za ConversationHandler
+# --- Stanja za ConversationHandler ---
 CHOOSE_LANGUAGE, START, SERVICES, ABOUT_US, CONTACT_US, SEND_EMAIL = range(6)
 ENTER_MESSAGE, COLLECT_CONTACT_INFO, CONFIRM_SEND = range(6, 9)
 
 # Dictionary za čuvanje korisničkih informacija tokom konverzacije
 user_data = {}
 
-# Učitavanje prevoda
+# --- Učitavanje prevoda ---
 def load_messages(lang_code):
     try:
         with open(f'messages_{lang_code}.json', 'r', encoding='utf-8') as f:
@@ -67,14 +70,14 @@ def get_message(lang_code, key):
 
 def get_current_language(update: Update):
     chat_id = update.effective_chat.id
-    return user_data.get(chat_id, {}).get('language', 'sr') # Default na srpski
+    return user_data.get(chat_id, {}).get('language', 'sr') # Default na srpski ako nije definisan
 
 # --- Komande i Handleri ---
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     chat_id = update.effective_chat.id
     current_lang = get_current_language(update)
-    user_data.setdefault(chat_id, {})['language'] = current_lang # Osiguraj da je jezik postavljen
+    user_data.setdefault(chat_id, {})['language'] = current_lang # Osiguraj da je jezik postavljen za novog korisnika
 
     keyboard = [
         [InlineKeyboardButton(get_message(current_lang, "services_button"), callback_data='services')],
@@ -109,7 +112,7 @@ async def set_language(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     lang_code = query.data.replace('lang_', '')
     user_data.setdefault(chat_id, {})['language'] = lang_code # Postavi izabrani jezik
 
-    current_lang = get_current_language(update)
+    current_lang = get_current_language(update) # Jezik je sada promenjen, pa ga ponovo dohvati
     keyboard = [
         [InlineKeyboardButton(get_message(current_lang, "services_button"), callback_data='services')],
         [InlineKeyboardButton(get_message(current_lang, "about_us_button"), callback_data='about_us')],
@@ -228,8 +231,12 @@ async def send_email_to_admin(update: Update, context: ContextTypes.DEFAULT_TYPE
         ]
 
         try:
-            # yagmail.SMTP se inicijalizuje sa akreditivima iz environment varijabli
-            # NE pokušava da pročita ~/.yagmail fajl ako su user i password dati
+            # Provera da li su svi neophodni podaci za slanje emaila prisutni
+            if not EMAIL_ADDRESS or not EMAIL_APP_PASSWORD or not ADMIN_EMAIL:
+                logger.error("Nedostaju email akreditivi ili ADMIN_EMAIL. Nije moguće poslati email.")
+                await query.edit_message_text(get_message(current_lang, "email_config_error"))
+                return await back_to_main_menu(update, context)
+
             with yagmail.SMTP(user=EMAIL_ADDRESS, password=EMAIL_APP_PASSWORD) as yag:
                 yag.send(
                     to=ADMIN_EMAIL,
@@ -240,16 +247,18 @@ async def send_email_to_admin(update: Update, context: ContextTypes.DEFAULT_TYPE
             logger.info(f"Email successfully sent from {EMAIL_ADDRESS} to {ADMIN_EMAIL}")
             await query.edit_message_text(get_message(current_lang, "email_sent_success"))
         except Exception as e:
-            logger.error(f"Error sending email: {e}")
+            logger.error(f"Greška prilikom slanja emaila: {e}")
             await query.edit_message_text(get_message(current_lang, "email_sent_error"))
 
     else: # if query.data == 'cancel_send'
         await query.edit_message_text(get_message(current_lang, "email_send_cancelled"))
 
-    # Resetovanje user_data za trenutnog korisnika
+    # Resetovanje user_data za trenutnog korisnika (čišćenje podataka nakon slanja/otkazivanja)
     if chat_id in user_data:
-        del user_data[chat_id]['email_message']
-        del user_data[chat_id]['contact_info']
+        if 'email_message' in user_data[chat_id]:
+            del user_data[chat_id]['email_message']
+        if 'contact_info' in user_data[chat_id]:
+            del user_data[chat_id]['contact_info']
 
     return await back_to_main_menu(update, context)
 
@@ -257,18 +266,23 @@ async def send_email_to_admin(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     current_lang = get_current_language(update)
     await update.message.reply_text(get_message(current_lang, "conversation_cancelled"))
+    # Osigurajte da ConversationHandler zaista završi
     return ConversationHandler.END
 
 async def unknown(update: Update, context: ContextTypes.DEFAULT_TYPE):
     current_lang = get_current_language(update)
     await context.bot.send_message(chat_id=update.effective_chat.id, text=get_message(current_lang, "unknown_command"))
 
-# Glavna funkcija za pokretanje bota
+# --- Glavna funkcija za pokretanje bota ---
 def main() -> None:
-    # Kreiranje Application objekta
+    # Kritična provera: Da li je BOT_TOKEN uopšte dostupan?
+    if not BOT_TOKEN:
+        logger.critical("BOT_TOKEN varijabla okruženja nije postavljena. Proverite Render Environment Varijable ili .env fajl.")
+        return # Prekida izvršavanje ako token nedostaje
+
     application = Application.builder().token(BOT_TOKEN).build()
 
-    # ConversationHandler za upravljanje stanjima
+    # --- ConversationHandler za upravljanje stanjima ---
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start_command)],
         states={
@@ -302,29 +316,42 @@ def main() -> None:
                 CallbackQueryHandler(back_to_main_menu, pattern='^main_menu$'), # Omogući povratak na glavni meni
             ],
         },
+        # Fallback handler za "cancel" ili ponovno pokretanje "start"
         fallbacks=[CommandHandler("cancel", cancel_conversation), CommandHandler("start", start_command)],
     )
 
     application.add_handler(conv_handler)
     application.add_handler(MessageHandler(filters.COMMAND, unknown)) # Hvata nepoznate komande
 
-    # Logika za pokretanje bota (Webhook vs. Polling)
+    # --- Logika za pokretanje bota (Webhook vs. Polling) ---
     if ON_RENDER:
-        # Podesite webhook URL
+        # Pre deploymenta na Render, OBAVEZNO proverite da li je WEB_SERVICE_URL postavljen!
+        if not WEB_SERVICE_URL:
+            logger.critical("WEB_SERVICE_URL varijabla okruženja nije postavljena. Nije moguće podesiti webhook na Renderu. Proverite Render Environment Variables.")
+            return # Prekida izvršavanje ako URL nije postavljen
+
         webhook_url_full = f"{WEB_SERVICE_URL}/{BOT_TOKEN}"
 
-        logging.info(f"Bot pokrenut u webhook modu na portu {PORT}, URL: {webhook_url_full}")
-        # Briše prethodne webhookove i postavlja novi
-        application.run_webhook(
-            listen="0.0.0.0",
-            port=PORT,
-            url_path=BOT_TOKEN,
-            webhook_url=webhook_url_full
-        )
+        logger.info(f"Bot pokrenut u webhook modu na portu {PORT}, URL: {webhook_url_full}")
+        try:
+            # run_webhook će podesiti webhook na Telegramu i pokrenuti web server
+            application.run_webhook(
+                listen="0.0.0.0",  # Slušaj na svim dostupnim mrežnim interfejsima
+                port=PORT,          # Port na kojem Render očekuje da vaša aplikacija sluša
+                url_path=BOT_TOKEN, # Putanja unutar URL-a gde će Telegram slati update-ove (najčešće token)
+                webhook_url=webhook_url_full, # Kompletan URL koji Telegramu treba da pošalje update-ove
+                allowed_updates=Update.ALL_TYPES # Preporučuje se da se specificiraju tipovi update-ova koje želite da primate
+            )
+        except TelegramError as e:
+            logger.critical(f"Telegram API Greška pri podešavanju webhooka: {e}. Moguće da je stari webhook aktivan ili token nije ispravan.")
+            # Ovdje možete dodati logiku za automatsko brisanje webhooka, ali to obično radi run_webhook
+        except Exception as e:
+            logger.critical(f"Došlo je do neočekivane greške tokom pokretanja webhooka: {e}")
     else:
-        logging.info("Bot pokrenut u lokalnom modu (polling)...")
-        application.run_polling(poll_interval=1.0) # Možete podesiti interval po potrebi
+        logger.info("Bot pokrenut u lokalnom modu (polling)...")
+        # run_polling automatski proverava nove poruke na Telegram API-ju
+        application.run_polling(poll_interval=1.0) # Možete podesiti interval po potrebi, npr. 0.5 sekundi
 
-# Pokreni bota
+# --- Pokreni bota kada se skripta direktno izvrši ---
 if __name__ == "__main__":
     main()
