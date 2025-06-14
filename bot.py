@@ -20,23 +20,25 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # --- Stanja za ConversationHandler ---
-# --- Stanja za ConversationHandler ---
+# Pažnja: Broj u range() mora odgovarati broju promenljivih (stanja) koje su ovde navedene.
+# Trenutno ih ima 19, pa je range(19).
 SELECT_LANGUAGE, MAIN_MENU, SELECT_COUNTRY, QUOTE_MENU, HEATING_CHOICE, \
 HEAT_PUMP_TYPE, WATER_HEATING_TYPE, RADIATOR_TYPE, FLOOR_HEATING_TYPE, \
 HEAT_PUMP_LOCATION_CHOICE, OBJECT_TYPE, AREA_INPUT, HAS_SKETCH_CHOICE, \
 UPLOAD_SKETCH, CONFIRM_QUOTE_SEND, ASK_FOR_EMAIL, RECEIVE_EMAIL, \
-CONTACT_MENU, SELECT_CONTACT_TYPE = range(19) # Ispravljeno sa 20 na 19
+CONTACT_MENU, SELECT_CONTACT_TYPE = range(19)
+
 # --- PODACI ZA KONTAKT I ADMINI ---
 # Podaci za kontakt
 contact_info = {
     'srbija': {
         # Podaci za IZVOĐAČA RADOVA u Srbiji
         'contractor': {
-            'name': 'Igor Bošković', # Dodato 'name' polje
+            'name': 'Igor Bošković', # Dodato 'name' polje - PROVERITE DA LI JE OVO ISPRAVNO!
             'phone': '+381603932566',
             'email': 'boskovicigor83@gmail.com',
-            'website': ':',
-            'telegram': '@IgorNS1983'
+            'website': ':', # Koristite : ako ne postoji
+            'telegram': '@IgorNS1983' # Koristite : ako ne postoji
         },
         # Podaci za PROIZVOĐAČA u Srbiji
         'manufacturer': {
@@ -61,7 +63,7 @@ contact_info = {
 
 # Telegram ID-ovi admina koji će primati obaveštenja (PROMENITE OVO S VAŠIM ID-jem!)
 ADMIN_IDS = [
-    6869162490, # ZAMENI OVO SA SVOJIM TELEGRAM ID-jem (ADMIN ID 1)
+    6869162490, # ZAMENI OVO SA SVOJIM TELEGRAM ID-jem!
 ]
 
 # Email podešavanja
@@ -88,8 +90,9 @@ def load_messages():
 ALL_MESSAGES = load_messages()
 
 def get_messages_for_user(user_id):
+    # Koristimo .get() da bismo izbegli KeyError ako user_id nije u user_data ili 'language' nije postavljeno
     lang = user_data.get(user_id, {}).get('language', 'sr') # Default na 'sr' ako nema jezika
-    return ALL_MESSAGES.get(lang, ALL_MESSAGES['sr']) # Fallback na 'sr' ako jezik ne postoji
+    return ALL_MESSAGES.get(lang, ALL_MESSAGES['sr']) # Fallback na 'sr' ako jezik ne postoji u ALL_MESSAGES
 
 # Funkcija za slanje emaila
 async def send_email(subject, body, to_email, attachments=None):
@@ -112,7 +115,7 @@ async def send_email(subject, body, to_email, attachments=None):
         logger.error(f"GREŠKA pri slanju emaila: {e}")
         return False
 
-# --- Pomoćne funkcije ---
+# --- Pomoćne funkcije (za prikaz menija i upita) ---
 async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int):
     messages = get_messages_for_user(user_id)
     keyboard = [
@@ -241,6 +244,7 @@ async def show_object_type_prompt(update: Update, context: ContextTypes.DEFAULT_
 
 async def show_area_input_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int):
     messages = get_messages_for_user(user_id)
+    # Koristimo update.message.reply_text jer se ova funkcija poziva nakon tekstualnog unosa
     user_data[user_id]['last_message_id'] = (await update.message.reply_text(messages["area_input_prompt"])).message_id
     return AREA_INPUT
 
@@ -251,12 +255,13 @@ async def show_has_sketch_choice(update: Update, context: ContextTypes.DEFAULT_T
         [InlineKeyboardButton(messages["no_button"], callback_data='has_sketch_no')]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
+    # Koristimo update.message.reply_text jer se ova funkcija poziva nakon tekstualnog unosa
     user_data[user_id]['last_message_id'] = (await update.message.reply_text(messages["has_sketch_prompt"], reply_markup=reply_markup)).message_id
     return HAS_SKETCH_CHOICE
 
 async def show_upload_sketch_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int):
     messages = get_messages_for_user(user_id)
-    user_data[user_id]['last_message_id'] = (await update.callback_query.edit_message_text(messages["upload_sketch_prompt"])).message_id
+    await update.callback_query.edit_message_text(messages["upload_sketch_prompt"])
     return UPLOAD_SKETCH
 
 async def show_confirm_quote_send(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int, include_sketch_option=False):
@@ -271,18 +276,45 @@ async def show_confirm_quote_send(update: Update, context: ContextTypes.DEFAULT_
             area=user_info.get('area', 'N/A')
         )
     elif user_info.get('heating_choice') == 'heating_heat_pump':
+        hp_type_name = messages.get(f"{user_info.get('hp_type_chosen', 'N/A')}_hp_button", user_info.get('hp_type_chosen', 'N/A'))
+        hp_location_name = messages.get(f"{user_info.get('hp_location', 'N/A')}_hp_button", user_info.get('hp_location', 'N/A'))
         quote_summary += messages["heat_pump_offer_summary"].format(
-            hp_type=messages.get(f"{user_info.get('hp_type_chosen', 'N/A')}_hp_button", user_info.get('hp_type_chosen', 'N/A')),
-            hp_location=messages.get(f"{user_info.get('hp_location', 'N/A')}_hp_button", user_info.get('hp_location', 'N/A')),
+            hp_type=hp_type_name,
+            hp_location=hp_location_name,
+            object_type=user_info.get('object_type', 'N/A'),
+            area=user_info.get('area', 'N/A')
+        )
+    elif user_info.get('heating_choice') == 'heating_radiator':
+        rad_type_name = messages.get(f"{user_info.get('radiator_type', 'N/A')}_button", user_info.get('radiator_type', 'N/A'))
+        quote_summary += messages["radiator_offer_summary"].format(
+            radiator_type=rad_type_name,
+            object_type=user_info.get('object_type', 'N/A'),
+            area=user_info.get('area', 'N/A')
+        )
+    elif user_info.get('heating_choice') == 'heating_floor':
+        floor_type_name = messages.get(f"{user_info.get('floor_heating_type', 'N/A')}_button", user_info.get('floor_heating_type', 'N/A'))
+        quote_summary += messages["floor_heating_offer_summary"].format(
+            floor_heating_type=floor_type_name,
+            object_type=user_info.get('object_type', 'N/A'),
+            area=user_info.get('area', 'N/A')
+        )
+    elif user_info.get('quote_type') == 'water_heating':
+        wh_type_name = messages.get(f"{user_info.get('water_heating_type', 'N/A')}_button", user_info.get('water_heating_type', 'N/A'))
+        quote_summary += messages["water_heating_offer_summary"].format(
+            water_heating_type=wh_type_name,
             object_type=user_info.get('object_type', 'N/A'),
             area=user_info.get('area', 'N/A')
         )
     # Dodajte ostale tipove grejanja po potrebi
     else:
+        # Fallback za scenarije koji možda nisu eksplicitno pokriveni
         quote_summary += messages["generic_quote_summary"].format(
             object_type=user_info.get('object_type', 'N/A'),
             area=user_info.get('area', 'N/A')
         )
+
+    if user_info.get('has_sketch'):
+        quote_summary += f"\n\n{messages['sketch_attached_confirmation']}"
 
     quote_summary += f"\n\n{messages['email_for_quote_prompt']}"
 
@@ -305,11 +337,13 @@ async def show_contact_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         return
 
     keyboard_buttons = []
-    if country_code == 'srbija':
-        keyboard_buttons.append([InlineKeyboardButton(messages["contact_contractor_button"], callback_data='contact_contractor_srbija')])
-        keyboard_buttons.append([InlineKeyboardButton(messages["contact_manufacturer_button"], callback_data='contact_manufacturer_srbija')])
-    elif country_code == 'crna_gora':
-        keyboard_buttons.append([InlineKeyboardButton(messages["contact_contractor_button"], callback_data='contact_contractor_crna_gora')])
+    # Proverava da li zemlja ima izvođača u contact_info pre dodavanja dugmeta
+    if country_code in contact_info and 'contractor' in contact_info[country_code]:
+        keyboard_buttons.append([InlineKeyboardButton(messages["contact_contractor_button"], callback_data=f'contact_contractor_{country_code}')])
+    
+    # Proverava da li zemlja ima proizvođača u contact_info pre dodavanja dugmeta
+    if country_code == 'srbija' and 'manufacturer' in contact_info[country_code]:
+        keyboard_buttons.append([InlineKeyboardButton(messages["contact_manufacturer_button"], callback_data=f'contact_manufacturer_{country_code}')])
 
     keyboard_buttons.append([InlineKeyboardButton(messages["back_button"], callback_data='back_main_menu')])
     reply_markup = InlineKeyboardMarkup(keyboard_buttons)
@@ -321,7 +355,10 @@ async def show_contact_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_id = update.effective_user.id
     logger.info(f"Komanda /start primljena od korisnika {user_id}. Inicijalizujem korisničke podatke.")
-    user_data[user_id] = {} # Inicijalizacija user_data za novog korisnika
+    # Inicijalizacija user_data za novog korisnika. Čuva se jezik i zemlja ako postoje.
+    if user_id not in user_data:
+        user_data[user_id] = {'language': 'sr', 'country': 'srbija'} # Default vrednosti
+    
     await choose_language(update, context, user_id)
     return SELECT_LANGUAGE
 
@@ -398,18 +435,18 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         
         country_code = user_data[user_id].get('country')
 
-        if not country_code or country_code not in contact_info: # Provera da li je zemlja postavljena
+        if not country_code or country_code not in contact_info:
             await query.edit_message_text(text=messages["choose_country_first"])
             await choose_country(update, context, user_id)
-            return
+            return SELECT_COUNTRY # Vraćamo se na odabir zemlje
 
         # Preuzimanje podataka o IZVOĐAČU iz contact_info rečnika
         hp_contractor_data = contact_info.get(country_code, {}).get('contractor')
 
         if hp_contractor_data:
-            contractor_name = hp_contractor_data.get('name', 'Nema naziva') # Dodato .get() za sigurnost
-            phone = hp_contractor_data.get('phone', 'Nema telefona')
-            email = hp_contractor_data.get('email', 'Nema emaila')
+            contractor_name = hp_contractor_data.get('name', messages["no_name_available"])
+            phone = hp_contractor_data.get('phone', messages["no_phone_available"])
+            email = hp_contractor_data.get('email', messages["no_email_available"])
             
             # Provera i formatiranje za website i telegram, ignorisanje ':'
             website_info = ""
@@ -435,11 +472,12 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             )
             await query.edit_message_text(text=info_text, parse_mode=ParseMode.MARKDOWN) # Dodato parse_mode
             await show_main_menu(update, context, user_id) # Vraća se na glavni meni
+            return ConversationHandler.END # Završava konverzaciju nakon prikaza informacija
         else:
             await query.edit_message_text(messages["sending_quote_error"]) # Generic error if no contractor data
             logger.error(f"Nema podataka o izvođaču toplotnih pumpi za zemlju: {country_code}")
             await show_main_menu(update, context, user_id)
-        return ConversationHandler.END # Završava konverzaciju nakon prikaza informacija
+            return ConversationHandler.END # Završava konverzaciju
 
     # --- Water Heating type selection ---
     elif callback_data.startswith('wh_'):
@@ -493,9 +531,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         contact_data = contact_info.get(country, {}).get(contact_type)
 
         if contact_data:
-            name = contact_data.get('name', 'Nema naziva')
-            phone = contact_data.get('phone', 'Nema telefona')
-            email = contact_data.get('email', 'Nema emaila')
+            name = contact_data.get('name', messages["no_name_available"])
+            phone = contact_data.get('phone', messages["no_phone_available"])
+            email = contact_data.get('email', messages["no_email_available"])
             
             website_info = ""
             if contact_data.get('website') and contact_data['website'] != ':':
@@ -540,8 +578,8 @@ async def receive_object_type(update: Update, context: ContextTypes.DEFAULT_TYPE
     user_id = update.effective_user.id
     messages = get_messages_for_user(user_id)
 
-    # Obriši prethodnu poruku "Unesite tip objekta"
-    if 'last_message_id' in user_data[user_id] and update.callback_query is None:
+    # Obriši prethodnu poruku "Unesite tip objekta" (ako postoji)
+    if 'last_message_id' in user_data[user_id]:
         try:
             await context.bot.delete_message(chat_id=user_id, message_id=user_data[user_id]['last_message_id'])
             del user_data[user_id]['last_message_id']
@@ -549,6 +587,7 @@ async def receive_object_type(update: Update, context: ContextTypes.DEFAULT_TYPE
             logger.warning(f"Could not delete message for user {user_id}: {e}")
 
     user_data[user_id]['object_type'] = update.message.text
+    # Prosleđujemo 'update' objekat koji sadrži 'message' objekat
     await show_area_input_prompt(update, context, user_id)
     return AREA_INPUT
 
@@ -556,8 +595,8 @@ async def receive_area_input(update: Update, context: ContextTypes.DEFAULT_TYPE)
     user_id = update.effective_user.id
     messages = get_messages_for_user(user_id)
 
-    # Obriši prethodnu poruku "Unesite kvadraturu"
-    if 'last_message_id' in user_data[user_id] and update.callback_query is None:
+    # Obriši prethodnu poruku "Unesite kvadraturu" (ako postoji)
+    if 'last_message_id' in user_data[user_id]:
         try:
             await context.bot.delete_message(chat_id=user_id, message_id=user_data[user_id]['last_message_id'])
             del user_data[user_id]['last_message_id']
@@ -567,6 +606,7 @@ async def receive_area_input(update: Update, context: ContextTypes.DEFAULT_TYPE)
     area_text = update.message.text
     if area_text.isdigit() and int(area_text) > 0:
         user_data[user_id]['area'] = int(area_text)
+        # Prosleđujemo 'update' objekat koji sadrži 'message' objekat
         await show_has_sketch_choice(update, context, user_id)
         return HAS_SKETCH_CHOICE
     else:
@@ -577,8 +617,8 @@ async def receive_sketch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     user_id = update.effective_user.id
     messages = get_messages_for_user(user_id)
 
-    # Obriši prethodnu poruku "Molimo pošaljite skicu"
-    if 'last_message_id' in user_data[user_id] and update.callback_query is None:
+    # Obriši prethodnu poruku "Molimo pošaljite skicu" (ako postoji)
+    if 'last_message_id' in user_data[user_id]:
         try:
             await context.bot.delete_message(chat_id=user_id, message_id=user_data[user_id]['last_message_id'])
             del user_data[user_id]['last_message_id']
@@ -586,7 +626,6 @@ async def receive_sketch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             logger.warning(f"Could not delete message for user {user_id}: {e}")
 
     photo_file = update.message.photo[-1].get_file()
-    file_id = photo_file.file_id
     # Preuzmi fajl
     file_path = await photo_file.download_to_drive()
     user_data[user_id]['sketch_path'] = str(file_path) # Sačuvaj putanju do fajla
@@ -679,7 +718,9 @@ async def receive_email_for_quote(update: Update, context: ContextTypes.DEFAULT_
     # Čišćenje korisničkih podataka i povratak na glavni meni
     if user_data[user_id].get('sketch_path') and os.path.exists(user_data[user_id]['sketch_path']):
         os.remove(user_data[user_id]['sketch_path']) # Brišemo fajl sa skicom
-    user_data[user_id] = {'language': user_data[user_id].get('language', 'sr'), 'country': user_data[user_id].get('country', 'srbija')} # Resetuj podatke osim jezika i zemlje
+    
+    # Resetuj podatke za ponovni unos, zadrži jezik i zemlju
+    user_data[user_id] = {'language': user_data[user_id].get('language', 'sr'), 'country': user_data[user_id].get('country', 'srbija')} 
     await show_main_menu(update, context, user_id)
     return ConversationHandler.END # Završava konverzaciju
 
@@ -692,6 +733,11 @@ async def unknown(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.error(f"Update {update} prouzrokovao grešku {context.error}")
+    # Opciono, pošaljite poruku korisniku da je došlo do greške
+    if update.effective_user:
+        messages = get_messages_for_user(update.effective_user.id)
+        await context.bot.send_message(chat_id=update.effective_user.id, text=messages.get("general_error_message", "Došlo je do greške. Pokušajte ponovo."))
+
 
 # Inicijalizacija user_data van funkcija da bi bila globalno dostupna
 user_data = {}
@@ -701,21 +747,15 @@ def main():
         logger.critical("TELEGRAM_BOT_TOKEN environment variable not set. Bot cannot start.")
         raise ValueError("TELEGRAM_BOT_TOKEN environment variable not set.")
 
-    if not WEBHOOK_URL:
-        logger.warning("WEBHOOK_URL environment variable not set. Bot will run in polling mode.")
-        application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-    else:
-        application = Application.builder().token(TELEGRAM_BOT_TOKEN).webhook(url=WEBHOOK_URL).build()
-        PORT = int(os.environ.get('PORT', 8080)) # Render koristi PORT 10000
-        application.run_webhook(listen="0.0.0.0",
-                                port=PORT,
-                                url_path=TELEGRAM_BOT_TOKEN)
-        logger.info(f"Bot pokrenut u webhook modu. URL: {WEBHOOK_URL}/{TELEGRAM_BOT_TOKEN}, Port: {PORT}")
-
+    # Uvek kreiramo Application objekat
+    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
     logger.info(f"Bot se pokreće sa najnovijim kodom! Vreme pokretanja: {datetime.datetime.now()}")
 
     # Konverzacijski handler
+    # Važno: entry_points može biti lista handlera.
+    # Ako želite da /start započinje konverzaciju, stavite ga ovde.
+    # Ako želite da dugmad pokreću konverzaciju, to radite kroz button_callback.
     sketch_conversation_handler = ConversationHandler(
         entry_points=[CommandHandler('start', start)],
         states={
@@ -724,7 +764,7 @@ def main():
             MAIN_MENU: [CallbackQueryHandler(button_callback, pattern='^menu_')],
             QUOTE_MENU: [CallbackQueryHandler(button_callback, pattern='^quote_')],
             HEATING_CHOICE: [CallbackQueryHandler(button_callback, pattern='^heating_')],
-            HEAT_PUMP_TYPE: [CallbackQueryHandler(button_callback, pattern='^hp_')], # Callback za HP tipove
+            HEAT_PUMP_TYPE: [CallbackQueryHandler(button_callback, pattern='^hp_')],
             WATER_HEATING_TYPE: [CallbackQueryHandler(button_callback, pattern='^wh_')],
             RADIATOR_TYPE: [CallbackQueryHandler(button_callback, pattern='^rad_')],
             FLOOR_HEATING_TYPE: [CallbackQueryHandler(button_callback, pattern='^floor_')],
@@ -748,7 +788,15 @@ def main():
     application.add_handler(MessageHandler(filters.COMMAND, unknown)) # Unknown command handler
     application.add_error_handler(error_handler)
 
-    if not WEBHOOK_URL:
+    if WEBHOOK_URL:
+        # Pokreni bot u webhook modu
+        PORT = int(os.environ.get('PORT', 8080)) # Render preporučuje da PORT bude 10000, proverite vaše podešavanje
+        application.run_webhook(listen="0.0.0.0",
+                                port=PORT,
+                                url_path=TELEGRAM_BOT_TOKEN,
+                                webhook_url=f"{WEBHOOK_URL}/{TELEGRAM_BOT_TOKEN}")
+        logger.info(f"Bot pokrenut u webhook modu. URL: {WEBHOOK_URL}/{TELEGRAM_BOT_TOKEN}, Port: {PORT}")
+    else:
         # Pokreni bot u polling modu (za lokalno testiranje)
         logger.info("Bot pokrenut u polling modu.")
         application.run_polling(allowed_updates=Update.ALL_TYPES)
