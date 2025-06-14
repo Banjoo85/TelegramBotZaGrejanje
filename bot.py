@@ -20,12 +20,12 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # --- Stanja za ConversationHandler ---
+# --- Stanja za ConversationHandler ---
 SELECT_LANGUAGE, MAIN_MENU, SELECT_COUNTRY, QUOTE_MENU, HEATING_CHOICE, \
 HEAT_PUMP_TYPE, WATER_HEATING_TYPE, RADIATOR_TYPE, FLOOR_HEATING_TYPE, \
 HEAT_PUMP_LOCATION_CHOICE, OBJECT_TYPE, AREA_INPUT, HAS_SKETCH_CHOICE, \
 UPLOAD_SKETCH, CONFIRM_QUOTE_SEND, ASK_FOR_EMAIL, RECEIVE_EMAIL, \
-CONTACT_MENU, SELECT_CONTACT_TYPE = range(20)
-
+CONTACT_MENU, SELECT_CONTACT_TYPE = range(19) # Ispravljeno sa 20 na 19
 # --- PODACI ZA KONTAKT I ADMINI ---
 # Podaci za kontakt
 contact_info = {
