@@ -1,13 +1,17 @@
-import asyncio # Dodajemo asyncio
+import asyncio
 import logging
 import os
 import json
 from aiogram import Bot, Dispatcher, types
-from aiogram.enums import ParseMode # Dodajemo ParseMode za lakše formatiranje poruka
-from aiogram.filters import CommandStart, Command # U aiogram v3, koristimo aiogram.filters
+from aiogram.enums import ParseMode
+from aiogram.filters import CommandStart, Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from aiogram.fsm.state import State, StatesGroup # NOVO: Pravilni import za State i StatesGroup
-from aiogram.fsm.context import FSMContext # NOVO: Pravilni import za FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.context import FSMContext
+from aiogram.client.default import DefaultBotProperties # <-- DODAJ OVU LINIJU
+from dotenv import load_dotenv # Dodaj load_dotenv
+
+load_dotenv() # Učitaj varijable okruženja iz .env fajla (ako ga koristiš lokalno)
 
 # Učitaj BOT_TOKEN iz okruženja
 API_TOKEN = os.getenv("BOT_TOKEN")
@@ -15,11 +19,10 @@ if not API_TOKEN:
     raise ValueError("BOT_TOKEN nije postavljen u ENV!")
 
 # Inicijalizacija bota i dispečera
-# NOVO: Bot inicijalizacija sa ParseMode
-bot = Bot(token=API_TOKEN, parse_mode=ParseMode.HTML)
+# NOVO: Bot inicijalizacija sa DefaultBotProperties
+bot = Bot(token=API_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML)) # <-- IZMENA JE OVDE
 # NOVO: Dispečer se inicijalizuje bez bota u konstruktoru
 dp = Dispatcher()
-
 # Postavke logovanja
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s') # Poboljšan format loga
 logger = logging.getLogger(__name__)
