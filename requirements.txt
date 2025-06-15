@@ -1,4 +1,5 @@
 python-telegram-bot[webhooks]==20.8
 yagmail
 python-dotenv
-httpx 
+httpx
+aiogram==3.20.0.post0  # DODAJTE OVU LINIJU
