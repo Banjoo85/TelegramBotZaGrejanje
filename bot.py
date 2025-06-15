@@ -58,20 +58,26 @@ ADMIN_IDS = [
 ]
 
 # Globalna varijabla za poruke
+# Globalna varijabla za poruke
 ALL_MESSAGES = {}
 
 def load_messages():
     messages = {}
+    # Dobij putanju do direktorijuma gde se nalazi trenutni fajl (bot.py)
+    script_dir = os.path.dirname(__file__)
+    
     # Učitavamo sve podržane jezike
     for lang in ['en', 'sr', 'de', 'ru']:
+        file_path = os.path.join(script_dir, f'messages_{lang}.json') # Kreiraj apsolutnu putanju
         try:
-            with open(f'messages_{lang}.json', 'r', encoding='utf-8') as f:
+            with open(file_path, 'r', encoding='utf-8') as f:
                 messages[lang] = json.load(f)
+            logger.info(f"Successfully loaded messages_{lang}.json from {file_path}") # Dodatni log za uspeh
         except FileNotFoundError:
-            logger.error(f"messages_{lang}.json not found. Creating empty dict for {lang}.")
+            logger.error(f"messages_{lang}.json not found at {file_path}. Creating empty dict for {lang}.")
             messages[lang] = {} # Kreiraj prazan rječnik ako fajl ne postoji
         except json.JSONDecodeError:
-            logger.error(f"Error decoding JSON from messages_{lang}.json. Check file format.")
+            logger.error(f"Error decoding JSON from {file_path}. Check file format.")
             messages[lang] = {} # Kreiraj prazan rječnik ako je format pogrešan
     return messages
 
