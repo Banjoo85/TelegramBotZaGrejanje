@@ -139,26 +139,28 @@ class ObjectInfo(StatesGroup):
 # /start handler – pozdravna poruka i izbor jezika
 # NOVO: Koristimo CommandStart filter iz aiogram.filters
 @dp.message(CommandStart())
-async def send_welcome(message: types.Message, state: FSMContext):
-    # Inicijalizujemo jezik korisnika na 'sr' ako nije postavljen (ili ako je resetovan FSM)
-    # Ovaj poziv će se pobrinuti da 'language' bude setovan u state-u
-    messages = await get_messages_for_user(message, state) # Prosljeđujemo message objekt
+async def send_welcome(message: types.Message, state: FSMContext) -> None:
+    # Postavi podrazumevani jezik na 'sr' ako nije postavljen
+    user_data = await state.get_data()
+    if "lang" not in user_data:
+        await state.update_data(lang="sr") # Default to Serbian
+        user_data = await state.get_data() # Refresh user_data after update
 
-    keyboard = InlineKeyboardMarkup(row_width=1)
-    keyboard.add(
-        InlineKeyboardButton(messages.get('english_button_text', 'English 🇬🇧'), callback_data="lang_en"),
-        InlineKeyboardButton(messages.get('serbian_button_text', 'Srpski 🇷🇸'), callback_data="lang_sr"),
-        InlineKeyboardButton(messages.get('german_button_text', 'Deutsch 🇩🇪'), callback_data="lang_de"),
-        InlineKeyboardButton(messages.get('russian_button_text', 'Русский 🇷🇺'), callback_data="lang_ru") # DODATO: Taster za ruski
-    )
-    # Koristimo edit_message_text ako je poruka već poslata (npr. na restart), inače send_message
-    try:
-        await message.answer(messages.get('choose_language_text', 'Please choose your language:'), reply_markup=keyboard)
-    except Exception as e:
-        logger.error(f"Could not edit message for language choice, sending new one: {e}")
-        await message.reply(messages.get('choose_language_text', 'Please choose your language:'), reply_markup=keyboard)
+    current_lang = user_data.get("lang", "sr")
+    messages = load_messages(current_lang)
 
-    await state.set_state(ObjectInfo.choosing_language) # Postavi stanje na izbor jezika
+    # NOVO: Eksplicitno kreiranje inline_keyboard-a
+    keyboard_buttons = [
+        [InlineKeyboardButton(text=messages['select_lang'], callback_data="select_language")],
+        [InlineKeyboardButton(text=messages['set_temp'], callback_data="set_temperature")],
+        [InlineKeyboardButton(text=messages['auto_mode'], callback_data="auto_mode")],
+        [InlineKeyboardButton(text=messages['manual_mode'], callback_data="manual_mode")],
+        [InlineKeyboardButton(text=messages['status'], callback_data="status")]
+    ]
+    keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons) # <-- IZMENA OVDE
+
+    await message.answer(messages['welcome_message'], reply_markup=keyboard)
+
 
 # Handler za izbor jezika
 # NOVO: Koristimo @dp.callback_query() sa lambda funkcijom za proveru callback_data
