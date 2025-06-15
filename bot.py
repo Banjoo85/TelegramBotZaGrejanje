@@ -1,11 +1,13 @@
+import asyncio # Dodajemo asyncio
 import logging
 import os
 import json
 from aiogram import Bot, Dispatcher, types
+from aiogram.enums import ParseMode # Dodajemo ParseMode za lakše formatiranje poruka
+from aiogram.filters import CommandStart, Command # U aiogram v3, koristimo aiogram.filters
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from aiogram.utils import executor
-from aiogram.dispatcher import FSMContext
-from aiogram.dispatcher.filters.state import State, StatesGroup
+from aiogram.fsm.state import State, StatesGroup # NOVO: Pravilni import za State i StatesGroup
+from aiogram.fsm.context import FSMContext # NOVO: Pravilni import za FSMContext
 
 # Učitaj BOT_TOKEN iz okruženja
 API_TOKEN = os.getenv("BOT_TOKEN")
@@ -13,11 +15,13 @@ if not API_TOKEN:
     raise ValueError("BOT_TOKEN nije postavljen u ENV!")
 
 # Inicijalizacija bota i dispečera
-bot = Bot(token=API_TOKEN)
-dp = Dispatcher(bot)
+# NOVO: Bot inicijalizacija sa ParseMode
+bot = Bot(token=API_TOKEN, parse_mode=ParseMode.HTML)
+# NOVO: Dispečer se inicijalizuje bez bota u konstruktoru
+dp = Dispatcher()
 
 # Postavke logovanja
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s') # Poboljšan format loga
 logger = logging.getLogger(__name__)
 
 # --- PODACI ZA KONTAKT I ADMINI ---
@@ -50,7 +54,7 @@ contact_info = {
 }
 
 ADMIN_IDS = [
-    6869162490,  # Tvoj Telegram ID; BCC kopija upita ide ovde
+    6869162490, 
 ]
 
 # Globalna varijabla za poruke
@@ -75,44 +79,39 @@ def load_messages():
 ALL_MESSAGES = load_messages()
 
 # Funkcija za dobijanje poruka za određenog korisnika
-async def get_messages_for_user(user_id: int, state: FSMContext):
-    user_data = await state.get_data()
-    # Pokušaj dohvatiti jezik iz FSMContext-a
-    lang = user_data.get('language')
+# AŽURIRANO: Koristi FromUser iz CallbackQuery ili Message objekta
+async def get_messages_for_user(user_data_obj, state: FSMContext):
+    user_state_data = await state.get_data()
+    lang = user_state_data.get('language')
 
     # Ako jezik nije postavljen u FSMContext-u, pokušaj iz Telegram klijenta
     if not lang:
-        try:
-            # Aiogram način za dobijanje user objecta iz callback_query ili message
-            # Ako je iz poruke: message.from_user.language_code
-            # Ako je iz callbacka: callback_query.from_user.language_code
-            # Treba nam robustniji način da dobijemo user_object bez preterane logike
-            
-            # Za start komandu, language_code je direktno dostupan
-            # Za callback_query, takođe je direktno dostupan
-            # Ne treba nam bot.get_chat_member ovde, jer su user podaci već u Message/CallbackQuery objektu.
-            pass # Odlučili smo da ne radimo automatsku detekciju na početku
-                 # već da uvek nudimo izbor jezika eksplicitno.
-                 # Dakle, ova logika bi se koristila SAMO ako bismo imali fallback.
-                 # Za sada, default je 'sr' ako nema izbora.
-        except Exception as e:
-            logger.warning(f"Greška pri pokušaju automatske detekcije jezika: {e}")
-            lang = 'sr' # Fallback na srpski ako dođe do greške ili se ne detektuje
+        # user_data_obj može biti types.Message ili types.CallbackQuery
+        if isinstance(user_data_obj, types.Message):
+            lang = user_data_obj.from_user.language_code
+        elif isinstance(user_data_obj, types.CallbackQuery):
+            lang = user_data_obj.from_user.language_code
+        
+        # Ograniči language_code na podržane jezike, npr. 'en' -> 'en', 'sr-Latn' -> 'sr'
+        if lang and '-' in lang:
+            lang = lang.split('-')[0]
 
-    # Ako i dalje nema jezika iz state-a, postaviti default
+        # Pad na 'sr' ako automatska detekcija nije uspešna ili jezik nije podržan
+        if lang not in ALL_MESSAGES or not ALL_MESSAGES[lang]:
+            logger.warning(f"Jezik '{lang}' (automatski detektovan) nije pronađen ili je prazan. Vraćam na 'sr'.")
+            lang = 'sr'
+    
+    # Ako i dalje nema jezika, postaviti default na 'sr'
     if not lang:
         lang = 'sr'
 
     # Uverite se da je izabrani jezik validan i da postoje poruke za njega
     if lang not in ALL_MESSAGES or not ALL_MESSAGES[lang]:
-        logger.warning(f"Jezik '{lang}' nije pronađen ili je prazan u ALL_MESSAGES. Vraćam na 'sr'.")
-        lang = 'sr' # Fallback na srpski
-        if lang not in ALL_MESSAGES or not ALL_MESSAGES[lang]:
-            logger.error(f"Ni fallback jezik 'sr' nije pronađen ili je prazan. Vraćam prazan rječnik.")
-            return {} # Kao poslednje rešenje, vratite prazan dict
+        logger.error(f"Ni fallback jezik 'sr' nije pronađen ili je prazan. Vraćam prazan rječnik.")
+        return {} # Kao poslednje rešenje, vratite prazan dict
     
     # Ažuriraj jezik u FSMContext-u ako je promenjen ili prvi put postavljen
-    if user_data.get('language') != lang:
+    if user_state_data.get('language') != lang:
         await state.update_data(language=lang)
     
     return ALL_MESSAGES[lang]
@@ -129,11 +128,12 @@ class ObjectInfo(StatesGroup):
     choosing_country = State() # Dodajemo stanje za izbor zemlje
 
 # /start handler – pozdravna poruka i izbor jezika
-@dp.message_handler(commands=['start'], state="*") # Omogućava restart iz bilo kog stanja
+# NOVO: Koristimo CommandStart filter iz aiogram.filters
+@dp.message(CommandStart())
 async def send_welcome(message: types.Message, state: FSMContext):
     # Inicijalizujemo jezik korisnika na 'sr' ako nije postavljen (ili ako je resetovan FSM)
     # Ovaj poziv će se pobrinuti da 'language' bude setovan u state-u
-    messages = await get_messages_for_user(message.from_user.id, state)
+    messages = await get_messages_for_user(message, state) # Prosljeđujemo message objekt
 
     keyboard = InlineKeyboardMarkup(row_width=1)
     keyboard.add(
@@ -149,14 +149,15 @@ async def send_welcome(message: types.Message, state: FSMContext):
         logger.error(f"Could not edit message for language choice, sending new one: {e}")
         await message.reply(messages.get('choose_language_text', 'Please choose your language:'), reply_markup=keyboard)
 
-    await ObjectInfo.choosing_language.set() # Postavi stanje na izbor jezika
+    await state.set_state(ObjectInfo.choosing_language) # Postavi stanje na izbor jezika
 
 # Handler za izbor jezika
-@dp.callback_query_handler(lambda c: c.data.startswith('lang_'), state=ObjectInfo.choosing_language)
+# NOVO: Koristimo @dp.callback_query() sa lambda funkcijom za proveru callback_data
+@dp.callback_query(lambda c: c.data.startswith('lang_'), ObjectInfo.choosing_language)
 async def process_language_selection(callback_query: types.CallbackQuery, state: FSMContext):
     lang_code = callback_query.data.split('_')[1]
     await state.update_data(language=lang_code) # Sačuvaj izabrani jezik
-    messages = await get_messages_for_user(callback_query.from_user.id, state) # Dohvati poruke na novom jeziku
+    messages = await get_messages_for_user(callback_query, state) # Dohvati poruke na novom jeziku
 
     keyboard = InlineKeyboardMarkup(row_width=2)
     keyboard.add(
@@ -170,16 +171,16 @@ async def process_language_selection(callback_query: types.CallbackQuery, state:
         message_id=callback_query.message.message_id,
         reply_markup=keyboard
     )
-    await bot.answer_callback_query(callback_query.id)
-    await ObjectInfo.choosing_country.set() # Postavi stanje na izbor zemlje
+    await callback_query.answer() # Odgovori na callback query
+    await state.set_state(ObjectInfo.choosing_country) # Postavi stanje na izbor zemlje
 
 
 # Handler za izbor zemlje
-@dp.callback_query_handler(lambda c: c.data.startswith('country_'), state=ObjectInfo.choosing_country)
+@dp.callback_query(lambda c: c.data.startswith('country_'), ObjectInfo.choosing_country)
 async def process_country_selection(callback_query: types.CallbackQuery, state: FSMContext):
     country = callback_query.data.split('_')[1]
     await state.update_data(country=country) # Sačuvaj izabranu zemlju
-    messages = await get_messages_for_user(callback_query.from_user.id, state)
+    messages = await get_messages_for_user(callback_query, state)
 
     keyboard = InlineKeyboardMarkup(row_width=1)
     if country == 'srbija':
@@ -204,16 +205,16 @@ async def process_country_selection(callback_query: types.CallbackQuery, state: 
             message_id=callback_query.message.message_id,
             reply_markup=keyboard
         )
-    await bot.answer_callback_query(callback_query.id)
+    await callback_query.answer()
     # Izlazimo iz stanja izbora zemlje, sledeći handleri će se uhvatiti na osnovu callback_data
     await state.set_state(None) # Opciono: možete postaviti na neko opštije stanje, npr. MAIN_MENU
 
 # --- HANDLERI ZA INSTALACIJU (AŽURIRANI) ---
 
 # Srbija – Grejna instalacija
-@dp.callback_query_handler(lambda c: c.data == "srbija_greinastall")
+@dp.callback_query(lambda c: c.data == "srbija_greinastall")
 async def process_srbija_greinastall(callback_query: types.CallbackQuery, state: FSMContext):
-    messages = await get_messages_for_user(callback_query.from_user.id, state)
+    messages = await get_messages_for_user(callback_query, state)
     keyboard = InlineKeyboardMarkup(row_width=1)
     options = [
         (messages.get('radiators_button', 'Radijatori'), "srbija_inst_radijatori"),
@@ -230,12 +231,12 @@ async def process_srbija_greinastall(callback_query: types.CallbackQuery, state:
         message_id=callback_query.message.message_id,
         reply_markup=keyboard
     )
-    await bot.answer_callback_query(callback_query.id)
+    await callback_query.answer()
 
 # Srbija – Toplotna pumpa
-@dp.callback_query_handler(lambda c: c.data == "srbija_toplotnapumpa")
+@dp.callback_query(lambda c: c.data == "srbija_toplotnapumpa")
 async def process_srbija_toplotnapumpa(callback_query: types.CallbackQuery, state: FSMContext):
-    messages = await get_messages_for_user(callback_query.from_user.id, state)
+    messages = await get_messages_for_user(callback_query, state)
     keyboard = InlineKeyboardMarkup(row_width=1)
     options = [
         (messages.get('water_to_water_hp_button', 'Voda-voda'), "srbija_toplotna_voda"),
@@ -249,12 +250,12 @@ async def process_srbija_toplotnapumpa(callback_query: types.CallbackQuery, stat
         message_id=callback_query.message.message_id,
         reply_markup=keyboard
     )
-    await bot.answer_callback_query(callback_query.id)
+    await callback_query.answer()
 
 # Crna Gora – Grejna instalacija (sve 5 opcija)
-@dp.callback_query_handler(lambda c: c.data == "crnagora_greinastall")
+@dp.callback_query(lambda c: c.data == "crnagora_greinastall")
 async def process_crnagora_greinastall(callback_query: types.CallbackQuery, state: FSMContext):
-    messages = await get_messages_for_user(callback_query.from_user.id, state)
+    messages = await get_messages_for_user(callback_query, state)
     keyboard = InlineKeyboardMarkup(row_width=1)
     options = [
         (messages.get('radiators_button', 'Radijatori'), "crnagora_inst_radijatori"),
@@ -271,12 +272,12 @@ async def process_crnagora_greinastall(callback_query: types.CallbackQuery, stat
         message_id=callback_query.message.message_id,
         reply_markup=keyboard
     )
-    await bot.answer_callback_query(callback_query.id)
+    await callback_query.answer()
 
 # Crna Gora – Toplotna pumpa
-@dp.callback_query_handler(lambda c: c.data == "crnagora_toplotnapumpa")
+@dp.callback_query(lambda c: c.data == "crnagora_toplotnapumpa")
 async def process_crnagora_toplotnapumpa(callback_query: types.CallbackQuery, state: FSMContext):
-    messages = await get_messages_for_user(callback_query.from_user.id, state)
+    messages = await get_messages_for_user(callback_query, state)
     keyboard = InlineKeyboardMarkup(row_width=1)
     # Za Crnu Goru se nudi samo opcija vazduh-voda
     keyboard.add(InlineKeyboardButton(messages.get('air_to_water_hp_button', 'Vazduh-voda'), callback_data="crnagora_toplotna_vazduh"))
@@ -286,10 +287,10 @@ async def process_crnagora_toplotnapumpa(callback_query: types.CallbackQuery, st
         message_id=callback_query.message.message_id,
         reply_markup=keyboard
     )
-    await bot.answer_callback_query(callback_query.id)
+    await callback_query.answer()
 
 # Handler za instalacijske i HP opcije – krećemo unos podataka o objektu
-@dp.callback_query_handler(lambda c: c.data in [
+@dp.callback_query(lambda c: c.data in [
     "srbija_inst_radijatori", "srbija_inst_fancoil", "srbija_inst_podno", "srbija_inst_podno_fancoil", "srbija_inst_komplet",
     "crnagora_inst_radijatori", "crnagora_inst_fancoil", "crnagora_inst_podno", "crnagora_inst_podno_fancoil", "crnagora_inst_komplet",
     "srbija_toplotna_voda", "srbija_toplotna_vazduh", "crnagora_toplotna_vazduh"
@@ -297,26 +298,26 @@ async def process_crnagora_toplotnapumpa(callback_query: types.CallbackQuery, st
 async def process_selection_and_start_object_info(callback_query: types.CallbackQuery, state: FSMContext):
     user_choice = callback_query.data
     await state.update_data(installation_choice=user_choice)
-    messages = await get_messages_for_user(callback_query.from_user.id, state)
+    messages = await get_messages_for_user(callback_query, state)
     await bot.edit_message_text(
         text=messages.get('object_type_prompt', "Molimo unesite tip objekta (npr. kuća, stan, poslovni prostor):"),
         chat_id=callback_query.message.chat.id,
         message_id=callback_query.message.message_id,
         reply_markup=None # Ukloni dugmad
     )
-    await ObjectInfo.awaiting_object_type.set()
-    await bot.answer_callback_query(callback_query.id)
+    await state.set_state(ObjectInfo.awaiting_object_type)
+    await callback_query.answer()
 
 # FSM – unos tipa objekta
-@dp.message_handler(state=ObjectInfo.awaiting_object_type)
+@dp.message(ObjectInfo.awaiting_object_type)
 async def process_object_type(message: types.Message, state: FSMContext):
     await state.update_data(object_type=message.text)
-    messages = await get_messages_for_user(message.from_user.id, state)
+    messages = await get_messages_for_user(message, state)
     await message.reply(messages.get('area_prompt', "Unesite površinu objekta (u m²):"))
-    await ObjectInfo.awaiting_area.set()
+    await state.set_state(ObjectInfo.awaiting_area)
 
 # FSM – unos površine
-@dp.message_handler(state=ObjectInfo.awaiting_area)
+@dp.message(ObjectInfo.awaiting_area)
 async def process_area(message: types.Message, state: FSMContext):
     # Provera da li je uneta vrednost numerička
     try:
@@ -325,16 +326,16 @@ async def process_area(message: types.Message, state: FSMContext):
             raise ValueError
         await state.update_data(area=str(area_value)) # Čuvamo kao string, ali znamo da je validan broj
     except ValueError:
-        messages = await get_messages_for_user(message.from_user.id, state)
+        messages = await get_messages_for_user(message, state)
         await message.reply(messages.get('invalid_area_input', "Nevažeći unos. Molimo unesite samo broj (npr. '120')."))
         return # Ostajemo u istom stanju
 
-    messages = await get_messages_for_user(message.from_user.id, state)
+    messages = await get_messages_for_user(message, state)
     await message.reply(messages.get('floors_prompt', "Unesite broj etaža:"))
-    await ObjectInfo.awaiting_floors.set()
+    await state.set_state(ObjectInfo.awaiting_floors)
 
 # FSM – unos broja etaža
-@dp.message_handler(state=ObjectInfo.awaiting_floors)
+@dp.message(ObjectInfo.awaiting_floors)
 async def process_floors(message: types.Message, state: FSMContext):
     # Provera da li je uneta vrednost numerička
     try:
@@ -343,19 +344,20 @@ async def process_floors(message: types.Message, state: FSMContext):
             raise ValueError
         await state.update_data(floors=str(floors_value))
     except ValueError:
-        messages = await get_messages_for_user(message.from_user.id, state)
+        messages = await get_messages_for_user(message, state)
         await message.reply(messages.get('invalid_floors_input', "Nevažeći unos. Molimo unesite samo ceo broj (npr. '2').")) # Dodajte novi ključ
         return # Ostajemo u istom stanju
 
-    messages = await get_messages_for_user(message.from_user.id, state)
+    messages = await get_messages_for_user(message, state)
     await message.reply(messages.get('sketch_prompt', "Ako želite, pošaljite skicu objekta kao sliku. Ako ne, napišite 'preskoči'."))
-    await ObjectInfo.awaiting_sketch.set()
+    await state.set_state(ObjectInfo.awaiting_sketch)
 
 # FSM – unos skice (slika ili tekst „preskoči“)
-@dp.message_handler(state=ObjectInfo.awaiting_sketch, content_types=types.ContentTypes.ANY)
+# NOVO: Koristimo content_types za specifikaciju tipova poruka
+@dp.message(ObjectInfo.awaiting_sketch)
 async def process_sketch(message: types.Message, state: FSMContext):
     sketch = None
-    messages = await get_messages_for_user(message.from_user.id, state)
+    messages = await get_messages_for_user(message, state)
     
     # Provera da li 'skip_text' postoji u messages, inače koristite 'preskoči' kao default
     skip_word = messages.get('skip_text', 'preskoči').lower()
@@ -373,7 +375,10 @@ async def process_sketch(message: types.Message, state: FSMContext):
 
     data = await state.get_data()
     sketch_status = messages.get('sketch_provided_label', 'Dostavljena') if sketch else messages.get('sketch_not_provided_label', 'Nije dostavljena')
-    summary = messages.get('summary_text', '').format(
+    
+    # Prilagođavamo summary poruku za svaki jezik
+    summary_text_key = 'summary_text'
+    summary = messages.get(summary_text_key, 'Sumarni pregled:\nTip objekta: {object_type}\nPovršina: {area} m²\nBroj etaža: {floors}\nSkica: {sketch_status}').format(
         object_type=data.get('object_type'),
         area=data.get('area'),
         floors=data.get('floors'),
@@ -383,10 +388,10 @@ async def process_sketch(message: types.Message, state: FSMContext):
     keyboard = InlineKeyboardMarkup()
     keyboard.add(InlineKeyboardButton(messages.get('send_inquiry_button', 'Pošalji upit'), callback_data="confirm_send"))
     await message.reply(summary, reply_markup=keyboard)
-    await ObjectInfo.confirming.set()
+    await state.set_state(ObjectInfo.confirming)
 
 # Finalni handler – potvrda i slanje upita
-@dp.callback_query_handler(lambda c: c.data == "confirm_send", state=ObjectInfo.confirming)
+@dp.callback_query(lambda c: c.data == "confirm_send", ObjectInfo.confirming)
 async def send_upit(callback_query: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
     installation_choice = data.get("installation_choice")
@@ -440,12 +445,12 @@ async def send_upit(callback_query: types.CallbackQuery, state: FSMContext):
     # Dodatne informacije za "Komplet ponuda sa toplotnom pumpom"
     if installation_choice == "srbija_inst_komplet" and manufacturer_info:
         upit_details += (
-            f"\n{messages.get('complete_offer_hp_button', 'Komplet ponuda sa toplotnom pumpom')} (Microma)\n"
+            f"\n{messages.get('complete_offer_hp_button', 'Komplet ponuda sa toplotnom pumpom')} ({manufacturer_info.get('name', 'N/A')})\n"
             f"{messages.get('contact_manufacturer_label', 'Kontakt proizvođača:')} {manufacturer_info.get('phone', 'N/A')}, {manufacturer_info.get('email', 'N/A')}\n"
         )
     elif installation_choice == "crnagora_inst_komplet" and contractor_info:
         upit_details += (
-            f"\n{messages.get('complete_offer_hp_button', 'Komplet ponuda sa toplotnom pumpom')} (Instal M - Vazduh-voda)\n"
+            f"\n{messages.get('complete_offer_hp_button', 'Komplet ponuda sa toplotnom pumpom')} ({contractor_info.get('name', 'N/A')} - Vazduh-voda)\n"
             f"{messages.get('contact_label', 'Kontakt:')} {contractor_info.get('phone', 'N/A')}, {contractor_info.get('email', 'N/A')}\n"
         )
             
@@ -470,14 +475,26 @@ async def send_upit(callback_query: types.CallbackQuery, state: FSMContext):
 
     # Slanje upita administratorima
     for admin_id in ADMIN_IDS:
-        await bot.send_message(admin_id, upit_details)
-        if sketch:
-            await bot.send_photo(admin_id, photo=sketch) # Šalji skicu kao posebnu poruku
+        try:
+            await bot.send_message(admin_id, upit_details)
+            if sketch:
+                await bot.send_photo(admin_id, photo=sketch) # Šalji skicu kao posebnu poruku
+        except Exception as e:
+            logger.error(f"Greška pri slanju poruke adminu {admin_id}: {e}")
     
     # Slanje potvrde korisniku
     await bot.send_message(callback_query.from_user.id, messages.get('inquiry_sent_success', "Vaš upit je poslat. Hvala!"))
-    await state.finish() # Resetuj FSM stanje
-    await bot.answer_callback_query(callback_query.id) # Odgovori na callback query
+    await state.clear() # Resetuj FSM stanje sa state.clear() umesto state.finish() u aiogram v3
+    await callback_query.answer() # Odgovori na callback query
+
+# Glavna funkcija za pokretanje bota
+async def main():
+    logger.info("Starting bot...")
+    # Obriši pending ažuriranja (ako je bot bio offline)
+    # Ovo je dobra praksa, ali može biti preskočeno ako želite da obradite stare poruke
+    await bot.delete_webhook(drop_pending_updates=True)
+    # Pokreni dispečer
+    await dp.start_polling(bot)
 
 if __name__ == '__main__':
-    executor.start_polling(dp, skip_updates=True)
+    asyncio.run(main())
