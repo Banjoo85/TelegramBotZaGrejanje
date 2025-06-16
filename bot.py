@@ -1,6 +1,8 @@
 import logging
 import smtplib
 import os
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.base import MIMEBase
@@ -57,16 +59,21 @@ contact_info = {
 # Telegram ID-ovi admina koji će primati obaveštenja
 # ZAMENI OVO SA SVOJIM STVARNIM TELEGRAM ID-jem!
 # Pronađi svoj ID koristeći @userinfobot na Telegramu.
-ADMIN_IDS = [
-    os.getenv("TELEGRAM_ADMIN_ID", type=int), # Učitava admin ID iz .env
-]
+ADMIN_IDS = []
+admin_id_str = os.getenv("TELEGRAM_ADMIN_ID")
+if admin_id_str:
+    try:
+        ADMIN_IDS.append(int(admin_id_str))
+    except ValueError:
+        logger.error(f"TELEGRAM_ADMIN_ID is not a valid integer: {admin_id_str}")
 
-# Postavljanje logginga (opciono, ali preporučljivo za debagovanje)
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
-logger = logging.getLogger(__name__)
+# Možeš i direktno, ali sa proverom (ako znaš da će uvek biti jedan admin):
+# admin_id_raw = os.getenv("TELEGRAM_ADMIN_ID")
+# ADMIN_IDS = [int(admin_id_raw)] if admin_id_raw else []
+
+# Ako imaš više admina, i želiš ih iz jedne varijable razdvojene zarezom (napredno, samo primer):
+# admin_ids_str = os.getenv("TELEGRAM_ADMIN_IDS", "") # Plural, ako zelis vise ID-jeva
+# ADMIN_IDS = [int(x.strip()) for x in admin_ids_str.split(',') if x.strip().isdigit()]
 
 # Definišemo stanja (states) za ConversationHandler
 SELECTING_LANGUAGE, SELECTING_COUNTRY, SELECTING_HEATING_TYPE, SELECTING_INSTALLATION_OPTION, \
