@@ -48,5 +48,6 @@
     "user_id_label": "ID Korisnika:",
     "first_name_label": "Ime:",
     "last_name_label": "Prezime:",
-    "username_label": "Korisničko ime:"
+    "username_label": "Korisničko ime:",
+    "select_lang": "Izaberite jezik" 
 }
