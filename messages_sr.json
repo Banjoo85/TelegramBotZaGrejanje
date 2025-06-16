@@ -1,4 +1,10 @@
 {
+    "welcome_message": "Dobrodošli! Ja sam bot koji će vam pomoći da pošaljete upit za grejne instalacije ili toplotne pumpe. Molimo izaberite opciju:",
+    "select_lang": "Izaberite jezik",
+    "set_temp": "Podesi temperaturu",
+    "auto_mode": "Automatski režim",
+    "manual_mode": "Ručni režim",
+    "status": "Status",
     "choose_language_text": "Molimo odaberite jezik:",
     "english_button_text": "English 🇬🇧",
     "serbian_button_text": "Srpski 🇷🇸",
@@ -48,6 +54,5 @@
     "user_id_label": "ID Korisnika:",
     "first_name_label": "Ime:",
     "last_name_label": "Prezime:",
-    "username_label": "Korisničko ime:",
-    "select_lang": "Izaberite jezik" 
+    "username_label": "Korisničko ime:"
 }
