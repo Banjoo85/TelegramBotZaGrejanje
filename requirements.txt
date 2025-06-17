@@ -1,5 +1,4 @@
-python-telegram-bot[webhooks]==20.8
+python-telegram-bot==20.8
 yagmail
-python-dotenv
-httpx
-aiogram==3.20.0.post0  # DODAJTE OVU LINIJU
+python-dotenv # Ovo je korisno za lokalni razvoj, Render ne zahteva
+httpx==0.26.0 # Render log je pokazao ovu verziju
