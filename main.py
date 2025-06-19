@@ -641,7 +641,7 @@ def main():
         fallbacks=[
             CommandHandler("cancel", cancel),
             CommandHandler("start", start), # Omogućava restartovanje u bilo kom trenutku
-            MessageHandler(filters.TEXT | filters.PHOTO | filters.DOCUMENT, fallback) # Hvata nepoznate unose
+            MessageHandler(filters.TEXT | filters.PHOTO | filters.Document.ALL, fallback) # Hvata nepoznate unose, ukljucujuci dokumente
         ],
     )
 
