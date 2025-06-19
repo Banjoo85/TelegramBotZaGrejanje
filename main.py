@@ -298,7 +298,7 @@ async def start(update: Update, context):
         [InlineKeyboardButton("Русский", callback_data="lang_ru")],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text(MESSAGES["srpski"]["welcome"], reply_markup=reply_markup)
+    await update.message.reply_text(MESSAGES["sr"]["welcome"], reply_markup=reply_markup)
     return SELECT_LANGUAGE
 
 async def select_language(update: Update, context):
