@@ -75,8 +75,9 @@ MICROMA = {
 ) = range(12)
 
 # --- Tekstovi poruka na različitim jezicima ---
+# --- Tekstovi poruka na različitim jezicima ---
 MESSAGES = {
-    "srpski": {
+    "sr": { # Promenjeno iz "srpski" u "sr"
         "welcome": "Dobrodošli! Molimo izaberite jezik:\nWelcome! Please choose a language:\nДобро пожаловать! Пожалуйста, выберите язык:",
         "choose_language": "Molimo izaberite jezik:",
         "choose_country": "Molimo izaberite zemlju:",
@@ -133,7 +134,6 @@ MESSAGES = {
         "hp_water_water": "Voda-Voda",
         "hp_air_water": "Vazduh-Voda",
         "select_hp_type_crnagora": "Molimo izaberite tip toplotne pumpe:",
-        # CG only has air-water as per your request
         "thank_you_heating": (
             "Hvala! Vaš upit za grejnu instalaciju je poslat."
             " Očekujte da vas izvođač radova kontaktira uskoro."
@@ -147,7 +147,7 @@ MESSAGES = {
         "choose_option": "Molimo izaberite jednu od ponuđenih opcija.",
         "start_over": "Započnite ponovo sa /start.",
     },
-    "english": {
+    "en": { # Promenjeno iz "english" u "en"
         "welcome": "Dobrodošli! Molimo izaberite jezik:\nWelcome! Please choose a language:\nДобро пожаловать! Пожалуйста, выберите язык:",
         "choose_language": "Please choose a language:",
         "choose_country": "Please choose a country:",
@@ -217,7 +217,7 @@ MESSAGES = {
         "choose_option": "Please choose one of the provided options.",
         "start_over": "Start over with /start.",
     },
-    "russian": {
+    "ru": { # Promenjeno iz "russian" u "ru"
         "welcome": "Dobrodošli! Molimo izaberite jezik:\nWelcome! Please choose a language:\nДобро пожаловать! Пожалуйста, выберите язык:",
         "choose_language": "Пожалуйста, выберите язык:",
         "choose_country": "Пожалуйста, выберите страну:",
