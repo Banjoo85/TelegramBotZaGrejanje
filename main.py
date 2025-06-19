@@ -1,5 +1,6 @@
 import os
 import logging
+import tempfile # For creating temporary files
 from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -24,6 +25,7 @@ logger = logging.getLogger(__name__)
 # --- Environment varijable (obavezno ih postavite na Render.com) ---
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 ADMIN_TELEGRAM_ID = os.getenv("TELEGRAM_ADMIN_ID") # Vaš Telegram ID za admin notifikacije (opciono, ali preporučeno)
+WEBHOOK_URL = os.getenv("WEBHOOK_URL") # URL vašeg Render servisa (npr. https://your-app-name.onrender.com)
 
 # Email kredencijali za slanje upita
 # Preporučuje se kreiranje posebnog email naloga za bota sa generisanom lozinkom za aplikaciju (App Password)
@@ -71,13 +73,12 @@ MICROMA = {
     RECEIVE_SKETCH,
     ENTER_CONTACT_INFO,
     SELECT_HP_TYPE,
-    FINAL_CONFIRMATION
+    FINAL_CONFIRMATION # Ovo stanje se ne koristi direktno, ali je dobro da stoji ako se dodaju finalni koraci
 ) = range(12)
 
 # --- Tekstovi poruka na različitim jezicima ---
-# --- Tekstovi poruka na različitim jezicima ---
 MESSAGES = {
-    "sr": { # Promenjeno iz "srpski" u "sr"
+    "sr": {
         "welcome": "Dobrodošli! Molimo izaberite jezik:\nWelcome! Please choose a language:\nДобро пожаловать! Пожалуйста, выберите язык:",
         "choose_language": "Molimo izaberite jezik:",
         "choose_country": "Molimo izaberite zemlju:",
@@ -147,7 +148,7 @@ MESSAGES = {
         "choose_option": "Molimo izaberite jednu od ponuđenih opcija.",
         "start_over": "Započnite ponovo sa /start.",
     },
-    "en": { # Promenjeno iz "english" u "en"
+    "en": {
         "welcome": "Dobrodošli! Molimo izaberite jezik:\nWelcome! Please choose a language:\nДобро пожаловать! Пожалуйста, выберите язык:",
         "choose_language": "Please choose a language:",
         "choose_country": "Please choose a country:",
@@ -217,7 +218,7 @@ MESSAGES = {
         "choose_option": "Please choose one of the provided options.",
         "start_over": "Start over with /start.",
     },
-    "ru": { # Promenjeno iz "russian" u "ru"
+    "ru": {
         "welcome": "Dobrodošli! Molimo izaberite jezik:\nWelcome! Please choose a language:\nДобро пожаловать! Пожалуйста, выберите язык:",
         "choose_language": "Пожалуйста, выберите язык:",
         "choose_country": "Пожалуйста, выберите страну:",
@@ -298,6 +299,7 @@ async def start(update: Update, context):
         [InlineKeyboardButton("Русский", callback_data="lang_ru")],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
+    # Default message for initial language selection, will be updated after selection
     await update.message.reply_text(MESSAGES["sr"]["welcome"], reply_markup=reply_markup)
     return SELECT_LANGUAGE
 
@@ -322,7 +324,7 @@ async def select_country(update: Update, context):
     """Hvata izbor zemlje i nudi izbor usluge (grejanje/toplotna pumpa)."""
     query = update.callback_query
     await query.answer()
-    lang_code = context.user_data.get('language', 'srpski') # Podrazumevano srpski
+    lang_code = context.user_data.get('language', 'sr') # Default to 'sr'
     
     country = query.data.split('_')[1] # 'srbija', 'crnagora'
     context.user_data['country'] = country
@@ -339,7 +341,7 @@ async def select_service(update: Update, context):
     """Hvata izbor usluge i preusmerava."""
     query = update.callback_query
     await query.answer()
-    lang_code = context.user_data.get('language', 'srpski')
+    lang_code = context.user_data.get('language', 'sr') # Default to 'sr'
     service = query.data.split('_')[1] # 'heating', 'hp'
     context.user_data['service'] = service
 
@@ -396,9 +398,9 @@ async def select_heating_type(update: Update, context):
     """Hvata tip grejne instalacije i traži površinu objekta."""
     query = update.callback_query
     await query.answer()
-    lang_code = context.user_data.get('language', 'srpski')
-    heating_type = query.data.split('_')[1]
-    context.user_data['heating_type'] = MESSAGES[lang_code][f"heating_{heating_type}"] # Sačuvaj tekstualni opis
+    lang_code = context.user_data.get('language', 'sr') # Default to 'sr'
+    heating_type_key = query.data.split('_')[1]
+    context.user_data['heating_type'] = MESSAGES[lang_code][f"heating_{heating_type_key}"] # Sačuvaj tekstualni opis
 
     await query.edit_message_text(text=MESSAGES[lang_code]["enter_surface"])
     return ENTER_SURFACE
@@ -407,9 +409,9 @@ async def select_hp_type(update: Update, context):
     """Hvata tip toplotne pumpe i, ako je toplotna pumpa za CG, ide na unos kontakt podataka, inače ide na unos površine."""
     query = update.callback_query
     await query.answer()
-    lang_code = context.user_data.get('language', 'srpski')
-    hp_type = query.data.split('_')[1]
-    context.user_data['hp_type'] = MESSAGES[lang_code][f"hp_{hp_type}"] # Sačuvaj tekstualni opis
+    lang_code = context.user_data.get('language', 'sr') # Default to 'sr'
+    hp_type_key = query.data.split('_')[1]
+    context.user_data['hp_type'] = MESSAGES[lang_code][f"hp_{hp_type_key}"] # Sačuvaj tekstualni opis
 
     # Ako je Crna Gora, odmah idemo na kontakt, jer nema dodatnih pitanja o objektu za HP
     if context.user_data['country'] == "crnagora":
@@ -421,7 +423,7 @@ async def select_hp_type(update: Update, context):
 
 async def enter_surface(update: Update, context):
     """Prima površinu objekta i traži broj spratova."""
-    lang_code = context.user_data.get('language', 'srpski')
+    lang_code = context.user_data.get('language', 'sr') # Default to 'sr'
     try:
         surface = int(update.message.text)
         context.user_data['surface'] = surface
@@ -433,7 +435,7 @@ async def enter_surface(update: Update, context):
 
 async def enter_floors(update: Update, context):
     """Prima broj spratova i traži vrstu objekta."""
-    lang_code = context.user_data.get('language', 'srpski')
+    lang_code = context.user_data.get('language', 'sr') # Default to 'sr'
     try:
         floors = int(update.message.text)
         context.user_data['floors'] = floors
@@ -455,9 +457,9 @@ async def select_object_type(update: Update, context):
     """Hvata vrstu objekta i pita za skicu."""
     query = update.callback_query
     await query.answer()
-    lang_code = context.user_data.get('language', 'srpski')
-    object_type = query.data.split('_')[1]
-    context.user_data['object_type'] = MESSAGES[lang_code][f"object_{object_type}"] # Sačuvaj tekstualni opis
+    lang_code = context.user_data.get('language', 'sr') # Default to 'sr'
+    object_type_key = query.data.split('_')[1]
+    context.user_data['object_type'] = MESSAGES[lang_code][f"object_{object_type_key}"] # Sačuvaj tekstualni opis
 
     keyboard = [
         [InlineKeyboardButton(MESSAGES[lang_code]["yes"], callback_data="ask_sketch_yes")],
@@ -471,19 +473,20 @@ async def ask_for_sketch(update: Update, context):
     """Rukuje odgovorom na pitanje o skici."""
     query = update.callback_query
     await query.answer()
-    lang_code = context.user_data.get('language', 'srpski')
+    lang_code = context.user_data.get('language', 'sr') # Default to 'sr'
     
     if query.data == "ask_sketch_yes":
         await query.edit_message_text(text=MESSAGES[lang_code]["upload_sketch"])
         return RECEIVE_SKETCH
     else: # ask_sketch_no
         context.user_data['sketch_info'] = MESSAGES[lang_code]["skip_sketch"]
+        context.user_data['sketch_file_id'] = None # Explicitly set to None if no sketch
         await query.edit_message_text(text=MESSAGES[lang_code]["enter_contact_info"])
         return ENTER_CONTACT_INFO
 
 async def receive_sketch(update: Update, context):
     """Prima skicu i traži kontakt podatke."""
-    lang_code = context.user_data.get('language', 'srpski')
+    lang_code = context.user_data.get('language', 'sr') # Default to 'sr'
     
     if update.message.document:
         file_id = update.message.document.file_id
@@ -504,12 +507,12 @@ async def receive_sketch(update: Update, context):
 
 async def enter_contact_info(update: Update, context):
     """Prima kontakt podatke i šalje upit."""
-    lang_code = context.user_data.get('language', 'srpski')
+    lang_code = context.user_data.get('language', 'sr') # Default to 'sr'
     context.user_data['contact_info'] = update.message.text
     user = update.message.from_user
 
     # Priprema sadržaja emaila
-    subject = f"Novi upit od Telegram bota - {context.user_data.get('service').upper()} - {context.user_data.get('country').upper()}"
+    subject = f"Novi upit od Telegram bota - {context.user_data.get('service', 'N/A').upper()} - {context.user_data.get('country', 'N/A').upper()}"
     body = [
         f"Korisničko ime Telegrama: @{user.username or 'N/A'} (ID: {user.id})",
         f"Izabrani jezik: {context.user_data.get('language', 'N/A')}",
@@ -542,20 +545,22 @@ async def enter_contact_info(update: Update, context):
         
         # Prilaganje skice ako postoji
         attachments = []
-        if 'sketch_file_id' in context.user_data:
+        if context.user_data.get('sketch_file_id'): # Check if sketch_file_id exists and is not None
             try:
                 file_id = context.user_data['sketch_file_id']
-                # Preuzimanje fajla
                 telegram_file = await context.bot.get_file(file_id)
-                # Kreiranje privremene putanje za čuvanje fajla
-                # Bolje je koristiti BytesIO ili tempfile da se ne čuvaju fajlovi na serveru
+                
+                # Determine file extension
                 file_extension = ""
                 if update.message.document:
                     file_extension = os.path.splitext(update.message.document.file_name)[1]
                 elif update.message.photo:
-                    file_extension = ".jpg" # Pretpostavka za slike
+                    file_extension = ".jpg" # Default for photos
+
+                # Create a temporary file to save the downloaded content
+                with tempfile.NamedTemporaryFile(delete=False, suffix=file_extension) as temp_file:
+                    temp_file_path = temp_file.name
                 
-                temp_file_path = f"/tmp/sketch_{file_id}{file_extension}"
                 await telegram_file.download_to_drive(custom_path=temp_file_path)
                 attachments.append(temp_file_path)
             except Exception as e:
@@ -603,22 +608,34 @@ async def enter_contact_info(update: Update, context):
 
 async def cancel(update: Update, context):
     """Omogućava korisniku da prekine konverzaciju."""
-    lang_code = context.user_data.get('language', 'srpski')
+    lang_code = context.user_data.get('language', 'sr') # Default to 'sr'
     await update.message.reply_text(MESSAGES[lang_code]["start_over"])
     context.user_data.clear()
     return ConversationHandler.END
 
 async def fallback(update: Update, context):
     """Hvata neprepoznate poruke."""
-    lang_code = context.user_data.get('language', 'srpski')
+    lang_code = context.user_data.get('language', 'sr') # Default to 'sr'
     await update.message.reply_text(MESSAGES[lang_code]["choose_option"])
+    return SELECT_LANGUAGE # Send them back to language selection or start over
+
+async def error_handler(update: Update, context):
+    """Log the error and send a message to the user."""
+    logger.error("Exception while handling an update:", exc_info=context.error)
+    lang_code = context.user_data.get('language', 'sr')
+    if update.effective_message:
+        await update.effective_message.reply_text(MESSAGES[lang_code]["something_went_wrong"])
 
 
 def main():
     """Pokreće bota."""
+    # Provera da li su potrebne environment varijable postavljene
     if not BOT_TOKEN:
-        logger.error("BOT_TOKEN nije postavljen. Molimo podesite environment varijablu BOT_TOKEN.")
-        return
+        logger.error("TELEGRAM_BOT_TOKEN nije postavljen. Molimo podesite environment varijablu TELEGRAM_BOT_TOKEN.")
+        exit(1) # Exit if essential variable is missing
+    if not EMAIL_SENDER_ADDRESS or not EMAIL_SENDER_PASSWORD:
+        logger.error("EMAIL_SENDER_ADDRESS ili EMAIL_SENDER_PASSWORD nisu postavljeni. Molimo podesite ih.")
+        exit(1) # Exit if essential variable is missing
 
     application = Application.builder().token(BOT_TOKEN).build()
 
@@ -635,42 +652,30 @@ def main():
             ENTER_FLOORS: [MessageHandler(filters.TEXT & ~filters.COMMAND, enter_floors)],
             SELECT_OBJECT_TYPE: [CallbackQueryHandler(select_object_type, pattern="^object_")],
             ASK_FOR_SKETCH: [CallbackQueryHandler(ask_for_sketch, pattern="^ask_sketch_")],
-            RECEIVE_SKETCH: [MessageHandler(filters.ALL & ~filters.COMMAND, receive_sketch)],
+            RECEIVE_SKETCH: [MessageHandler(filters.PHOTO | filters.Document.ALL, receive_sketch)],
             ENTER_CONTACT_INFO: [MessageHandler(filters.TEXT & ~filters.COMMAND, enter_contact_info)],
         },
-        fallbacks=[
-            CommandHandler("cancel", cancel),
-            CommandHandler("start", start), # Omogućava restartovanje u bilo kom trenutku
-            MessageHandler(filters.TEXT | filters.PHOTO | filters.Document.ALL, fallback) # Hvata nepoznate unose, ukljucujuci dokumente
-        ],
+        fallbacks=[CommandHandler("cancel", cancel), MessageHandler(filters.ALL, fallback)],
+        allow_reentry=True # Allow re-entering the conversation with /start
     )
 
     application.add_handler(conv_handler)
-    application.add_handler(CommandHandler("cancel", cancel)) # Globalni cancel
+    application.add_error_handler(error_handler) # Add error handler
 
-    # --- Render.com deployment konfiguracija ---
-    # Render.com obezbeđuje PORT environment varijablu
-    PORT = int(os.environ.get("PORT", 8080))
-    # Render.com hostname je dostupan preko RENDER_EXTERNAL_HOSTNAME
-    # ili ga možete podesiti ručno u Render dashboardu kao WEBHOOK_URL
-    WEBHOOK_URL = os.getenv("WEBHOOK_URL") 
+    # Webhook setup for Render.com deployment
+    PORT = int(os.environ.get("PORT", 8080)) # Default to 8080 if PORT is not set
     
     if WEBHOOK_URL:
         logger.info(f"Pokušavam da postavim webhook na: {WEBHOOK_URL}")
-        try:
-            application.run_webhook(
-                listen="0.0.0.0",
-                port=PORT,
-                url_path=BOT_TOKEN, # Vaš bot token kao putanja za webhook
-                webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}"
-            )
-            logger.info("Webhook je uspešno postavljen.")
-        except Exception as e:
-            logger.error(f"Greška pri postavljanju webhooka: {e}")
-            logger.warning("Pokušavam da pokrenem bota u polling modu zbog greške sa webhookom.")
-            application.run_polling(allowed_updates=Update.ALL_TYPES)
+        application.run_webhook(
+            listen="0.0.0.0",
+            port=PORT,
+            url_path="", # This must match what Render.com expects (often empty string for root path)
+            webhook_url=WEBHOOK_URL
+        )
+        logger.info("Webhook je uspešno postavljen.")
     else:
-        logger.warning("WEBHOOK_URL nije postavljen. Pokrećem bota u polling modu (nije za produkciju na Renderu).")
+        logger.warning("WEBHOOK_URL nije postavljen. Pokrećem polling. Ovo nije preporučeno za Render.com jer će bot spavati.")
         application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
