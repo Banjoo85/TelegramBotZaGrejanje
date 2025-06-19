@@ -22,7 +22,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # --- Environment varijable (obavezno ih postavite na Render.com) ---
-BOT_TOKEN = os.getenv("BOT_TOKEN")
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 ADMIN_TELEGRAM_ID = os.getenv("TELEGRAM_ADMIN_ID") # Vaš Telegram ID za admin notifikacije (opciono, ali preporučeno)
 
 # Email kredencijali za slanje upita
