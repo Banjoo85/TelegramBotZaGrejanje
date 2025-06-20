@@ -1,6 +1,6 @@
 import os
 import logging
-import tempfile # For creating temporary files
+import tempfile
 from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -13,30 +13,21 @@ from telegram.ext import (
 )
 import yagmail
 
-# Učitavanje .env fajla za lokalni razvoj (na Renderu neće biti potrebno, ali ne smeta)
 load_dotenv()
 
-# Konfiguracija logovanja
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# --- Environment varijable (obavezno ih postavite na Render.com) ---
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-ADMIN_TELEGRAM_ID = os.getenv("TELEGRAM_ADMIN_ID") # Vaš Telegram ID za admin notifikacije (opciono, ali preporučeno)
-WEBHOOK_URL = os.getenv("WEBHOOK_URL") # URL vašeg Render servisa (npr. https://your-app-name.onrender.com)
+ADMIN_TELEGRAM_ID = os.getenv("TELEGRAM_ADMIN_ID")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 
-# Email kredencijali za slanje upita
-# Preporučuje se kreiranje posebnog email naloga za bota sa generisanom lozinkom za aplikaciju (App Password)
 EMAIL_SENDER_ADDRESS = os.getenv("EMAIL_SENDER_ADDRESS")
-EMAIL_SENDER_PASSWORD = os.getenv("EMAIL_SENDER_PASSWORD") # Koristite App Password ako je u pitanju Gmail
-
-# Vaš email za BCC kopije
+EMAIL_SENDER_PASSWORD = os.getenv("EMAIL_SENDER_PASSWORD")
 BCC_EMAIL = "banjooo85@gmail.com"
 
-# --- Podaci o izvođačima i firmama ---
-# Definisanje ovih podataka kao Python rečnika čini ih lakšim za održavanje
 CONTRACTORS = {
     "srbija": {
         "name": "Igor Bošković",
@@ -60,7 +51,6 @@ MICROMA = {
     "website": "https://microma.rs"
 }
 
-# --- Stanja konverzacije ---
 (
     SELECT_LANGUAGE,
     SELECT_COUNTRY,
@@ -76,7 +66,6 @@ MICROMA = {
     FINAL_CONFIRMATION
 ) = range(12)
 
-# --- Tekstovi poruka na različitim jezicima ---
 MESSAGES = {
     "sr": {
         "welcome": "Dobrodošli! Molimo izaberite jezik:\nWelcome! Please choose a language:\nДобро пожаловать! Пожалуйста, выберите язык:",
@@ -112,7 +101,7 @@ MESSAGES = {
         "heating_fancoil": "Fancoil-i",
         "heating_underfloor": "Podno grejanje",
         "heating_underfloor_fancoil": "Podno grejanje + Fancoil-i",
-        "heating_complete_hp": "Komplet ponuda sa toplotnom pumpom", # AŽURIRANO IME KAO OPCIJA
+        "heating_complete_hp": "Komplet ponuda sa toplotnom pumpom",
         "enter_surface": "Molimo unesite površinu objekta u kvadratnim metrima (samo broj, npr. 120):",
         "surface_invalid": "Neispravan unos. Molimo unesite samo broj za površinu objekta u kvadratnim metrima.",
         "enter_floors": "Molimo unesite broj spratova objekta (samo broj, npr. 2):",
@@ -134,7 +123,7 @@ MESSAGES = {
         "select_hp_type_srbija": "Molimo izaberite tip toplotne pumpe:",
         "hp_water_water": "Voda-Voda",
         "hp_air_water": "Vazduh-Voda",
-        "select_hp_type_crnagora": "Molimo izaberite tip toplotne pumpe:", # Možda "Vazduh-Voda" je jedina opcija
+        "select_hp_type_crnagora": "Molimo izaberite tip toplotne pumpe:",
         "thank_you_heating": (
             "Hvala! Vaš upit za grejnu instalaciju je poslat."
             " Očekujte da vas izvođač radova kontaktira uskoro."
@@ -182,7 +171,7 @@ MESSAGES = {
         "heating_fancoil": "Fancoils",
         "heating_underfloor": "Underfloor Heating",
         "heating_underfloor_fancoil": "Underfloor Heating + Fancoils",
-        "heating_complete_hp": "Complete offer with Heat Pump", # AŽURIRANO IME KAO OPCIJA
+        "heating_complete_hp": "Complete offer with Heat Pump",
         "enter_surface": "Please enter the object's surface area in square meters (number only, e.g., 120):",
         "surface_invalid": "Invalid input. Please enter a number for the object's surface area in square meters.",
         "enter_floors": "Please enter the number of floors of the object (number only, e.g., 2):",
@@ -204,7 +193,7 @@ MESSAGES = {
         "select_hp_type_srbija": "Please select the heat pump type:",
         "hp_water_water": "Water-Water",
         "hp_air_water": "Air-Water",
-        "select_hp_type_crnagora": "Please select the heat pump type:", # Možda "Air-Water" je jedina opcija
+        "select_hp_type_crnagora": "Please select the heat pump type:",
         "thank_you_heating": (
             "Thank you! Your heating installation inquiry has been sent."
             " The contractor will contact you soon."
@@ -252,7 +241,7 @@ MESSAGES = {
         "heating_fancoil": "Фанкойлы",
         "heating_underfloor": "Подогрев пола",
         "heating_underfloor_fancoil": "Подогрев пола + Фанкойлы",
-        "heating_complete_hp": "Полное предложение с тепловым насосом", # AŽURIRANO IME KAO OPCIJA
+        "heating_complete_hp": "Полное предложение с тепловым насосом",
         "enter_surface": "Пожалуйста, введите площадь объекта в квадратных метрах (только число, например, 120):",
         "surface_invalid": "Неверный ввод. Пожалуйста, введите только число для площади объекта в квадратных метрах.",
         "enter_floors": "Пожалуйста, введите количество этажей объекта (только число, например, 2):",
@@ -274,7 +263,7 @@ MESSAGES = {
         "select_hp_type_srbija": "Пожалуйста, выберите тип теплового насоса:",
         "hp_water_water": "Вода-Вода",
         "hp_air_water": "Воздух-Вода",
-        "select_hp_type_crnagora": "Пожалуйста, выберите тип теплового насоса:", # Možda "Воздух-Вода" je jedina opcija
+        "select_hp_type_crnagora": "Пожалуйста, выберите тип теплового насоса:",
         "thank_you_heating": (
             "Спасибо! Ваш запрос на систему отопления был отправлен."
             " Подрядчик свяжется с вами в ближайшее время."
@@ -290,7 +279,6 @@ MESSAGES = {
     }
 }
 
-# --- Komandni hendleri ---
 async def start(update: Update, context):
     """Šalje pozdravnu poruku i traži izbor jezika."""
     keyboard = [
@@ -299,7 +287,6 @@ async def start(update: Update, context):
         [InlineKeyboardButton("Русский", callback_data="lang_ru")],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    # Default message for initial language selection, will be updated after selection
     await update.message.reply_text(MESSAGES["sr"]["welcome"], reply_markup=reply_markup)
     return SELECT_LANGUAGE
 
@@ -307,9 +294,8 @@ async def select_language(update: Update, context):
     """Hvata izbor jezika i traži izbor zemlje."""
     query = update.callback_query
     await query.answer()
-    lang_code = query.data.split('_')[1] # 'sr', 'en', 'ru'
+    lang_code = query.data.split('_')[1]
     
-    # Sačuvajte izabrani jezik u korisničkom kontekstu
     context.user_data['language'] = lang_code
     logger.info(f"User {update.effective_user.id} selected language: {lang_code}")
     
@@ -325,9 +311,9 @@ async def select_country(update: Update, context):
     """Hvata izbor zemlje i nudi izbor usluge (grejanje/toplotna pumpa)."""
     query = update.callback_query
     await query.answer()
-    lang_code = context.user_data.get('language', 'sr') # Default to 'sr'
+    lang_code = context.user_data.get('language', 'sr')
     
-    country = query.data.split('_')[1] # 'srbija', 'crnagora'
+    country = query.data.split('_')[1]
     context.user_data['country'] = country
     logger.info(f"User {update.effective_user.id} selected country: {country}")
 
@@ -343,8 +329,8 @@ async def select_service(update: Update, context):
     """Hvata izbor usluge i preusmerava."""
     query = update.callback_query
     await query.answer()
-    lang_code = context.user_data.get('language', 'sr') # Default to 'sr'
-    service = query.data.split('_')[1] # 'heating', 'hp'
+    lang_code = context.user_data.get('language', 'sr')
+    service = query.data.split('_')[1]
     context.user_data['service'] = service
     logger.info(f"User {update.effective_user.id} selected service: {service}")
 
@@ -357,15 +343,15 @@ async def select_service(update: Update, context):
             await query.edit_message_text(text=MESSAGES[lang_code]["crnagora_contractor_info_heating"])
             contractor_data = CONTRACTORS['crnagora']
         
-        context.user_data['recipient_email'] = contractor_data['email'] # Postavljanje emaila primaoca
+        context.user_data['recipient_email'] = contractor_data['email']
         context.user_data['recipient_name'] = contractor_data['name']
 
         keyboard = [
-            [InlineKeyboardButton(MESSAGES[lang_code]["heating_radiators"], callback_data="type_radiators")],
-            [InlineKeyboardButton(MESSAGES[lang_code]["heating_fancoil"], callback_data="type_fancoil")],
-            [InlineKeyboardButton(MESSAGES[lang_code]["heating_underfloor"], callback_data="type_underfloor")],
-            [InlineKeyboardButton(MESSAGES[lang_code]["heating_underfloor_fancoil"], callback_data="type_underfloor_fancoil")],
-            [InlineKeyboardButton(MESSAGES[lang_code]["heating_complete_hp"], callback_data="type_complete_hp")],
+            [InlineKeyboardButton(MESSAGES[lang_code]["heating_radiators"], callback_data="heating_radiators")],
+            [InlineKeyboardButton(MESSAGES[lang_code]["heating_fancoil"], callback_data="heating_fancoil")],
+            [InlineKeyboardButton(MESSAGES[lang_code]["heating_underfloor"], callback_data="heating_underfloor")],
+            [InlineKeyboardButton(MESSAGES[lang_code]["heating_underfloor_fancoil"], callback_data="heating_underfloor_fancoil")],
+            [InlineKeyboardButton(MESSAGES[lang_code]["heating_complete_hp"], callback_data="heating_complete_hp")], # ISPRAVLJENO OVDJE
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await context.bot.send_message(chat_id=query.message.chat_id, text=MESSAGES[lang_code]["select_heating_type"], reply_markup=reply_markup)
@@ -401,16 +387,14 @@ async def select_heating_type(update: Update, context):
     """Hvata tip grejne instalacije i traži površinu objekta."""
     query = update.callback_query
     await query.answer()
-    lang_code = context.user_data.get('language', 'sr') # Default to 'sr'
-    heating_type_key = query.data.split('_')[1]
+    lang_code = context.user_data.get('language', 'sr')
+    heating_type_key = query.data # Uzmi ceo callback_data string
     
-    # Provera da li ključ postoji, inače koristi fallback
-    # Ovo bi trebalo da uhvati i 'complete_hp'
-    if f"heating_{heating_type_key}" in MESSAGES[lang_code]:
-        context.user_data['heating_type'] = MESSAGES[lang_code][f"heating_{heating_type_key}"]
+    if heating_type_key in MESSAGES[lang_code]:
+        context.user_data['heating_type'] = MESSAGES[lang_code][heating_type_key]
     else:
         logger.warning(f"Nepoznat heating_type_key: {heating_type_key} za jezik: {lang_code}")
-        context.user_data['heating_type'] = "N/A - Unknown Heating Type" # Fallback tekst
+        context.user_data['heating_type'] = "N/A - Unknown Heating Type"
 
     logger.info(f"User {update.effective_user.id} selected heating type: {context.user_data['heating_type']}")
     await query.edit_message_text(text=MESSAGES[lang_code]["enter_surface"])
@@ -420,49 +404,48 @@ async def select_hp_type(update: Update, context):
     """Hvata tip toplotne pumpe i, ako je toplotna pumpa za CG, ide na unos kontakt podataka, inače ide na unos površine."""
     query = update.callback_query
     await query.answer()
-    lang_code = context.user_data.get('language', 'sr') # Default to 'sr'
-    hp_type_key = query.data.split('_')[1]
+    lang_code = context.user_data.get('language', 'sr')
     
-    # Provera da li ključ postoji
-    if f"hp_{hp_type_key}" in MESSAGES[lang_code]:
-        context.user_data['hp_type'] = MESSAGES[lang_code][f"hp_{hp_type_key}"] # Sačuvaj tekstualni opis
+    hp_type_key = query.data # Uzmi ceo callback_data string, npr. "hp_water_water"
+    
+    if hp_type_key in MESSAGES[lang_code]:
+        context.user_data['hp_type'] = MESSAGES[lang_code][hp_type_key]
     else:
         logger.warning(f"Nepoznat hp_type_key: {hp_type_key} za jezik: {lang_code}")
-        context.user_data['hp_type'] = "N/A - Unknown HP Type" # Fallback tekst
+        context.user_data['hp_type'] = "N/A - Unknown HP Type"
 
     logger.info(f"User {update.effective_user.id} selected HP type: {context.user_data['hp_type']}")
 
-    # Ako je Crna Gora, odmah idemo na kontakt, jer nema dodatnih pitanja o objektu za HP
     if context.user_data['country'] == "crnagora":
         await query.edit_message_text(text=MESSAGES[lang_code]["enter_contact_info"])
         return ENTER_CONTACT_INFO
-    else: # Srbija - idemo na pitanja o objektu za HP
+    else:
         await query.edit_message_text(text=MESSAGES[lang_code]["enter_surface"])
         return ENTER_SURFACE
 
 async def enter_surface(update: Update, context):
     """Prima površinu objekta i traži broj spratova."""
-    lang_code = context.user_data.get('language', 'sr') # Default to 'sr'
+    lang_code = context.user_data.get('language', 'sr')
     user_input = update.message.text
     try:
         surface = int(user_input)
         context.user_data['surface'] = surface
-        logger.info(f"User {update.effective_user.id} entered surface: {surface} m²") # Dodato logovanje
+        logger.info(f"User {update.effective_user.id} entered surface: {surface} m²")
         await update.message.reply_text(MESSAGES[lang_code]["enter_floors"])
         return ENTER_FLOORS
     except ValueError:
-        logger.warning(f"User {update.effective_user.id} entered invalid surface: '{user_input}'") # Dodato logovanje
+        logger.warning(f"User {update.effective_user.id} entered invalid surface: '{user_input}'")
         await update.message.reply_text(MESSAGES[lang_code]["surface_invalid"])
-        return ENTER_SURFACE # Ostaje u istom stanju dok ne unese ispravno
+        return ENTER_SURFACE
 
 async def enter_floors(update: Update, context):
     """Prima broj spratova i traži vrstu objekta."""
-    lang_code = context.user_data.get('language', 'sr') # Default to 'sr'
+    lang_code = context.user_data.get('language', 'sr')
     user_input = update.message.text
     try:
         floors = int(user_input)
         context.user_data['floors'] = floors
-        logger.info(f"User {update.effective_user.id} entered floors: {floors}") # Dodato logovanje
+        logger.info(f"User {update.effective_user.id} entered floors: {floors}")
         
         keyboard = [
             [InlineKeyboardButton(MESSAGES[lang_code]["object_house"], callback_data="object_house")],
@@ -474,23 +457,22 @@ async def enter_floors(update: Update, context):
         await update.message.reply_text(MESSAGES[lang_code]["select_object_type"], reply_markup=reply_markup)
         return SELECT_OBJECT_TYPE
     except ValueError:
-        logger.warning(f"User {update.effective_user.id} entered invalid floors: '{user_input}'") # Dodato logovanje
+        logger.warning(f"User {update.effective_user.id} entered invalid floors: '{user_input}'")
         await update.message.reply_text(MESSAGES[lang_code]["floors_invalid"])
-        return ENTER_FLOORS # Ostaje u istom stanju dok ne unese ispravno
+        return ENTER_FLOORS
 
 async def select_object_type(update: Update, context):
     """Hvata vrstu objekta i pita za skicu."""
     query = update.callback_query
     await query.answer()
-    lang_code = context.user_data.get('language', 'sr') # Default to 'sr'
-    object_type_key = query.data.split('_')[1]
+    lang_code = context.user_data.get('language', 'sr')
+    object_type_key = query.data # Uzmi ceo callback_data string
     
-    # Provera da li ključ postoji
-    if f"object_{object_type_key}" in MESSAGES[lang_code]:
-        context.user_data['object_type'] = MESSAGES[lang_code][f"object_{object_type_key}"] # Sačuvaj tekstualni opis
+    if object_type_key in MESSAGES[lang_code]:
+        context.user_data['object_type'] = MESSAGES[lang_code][object_type_key]
     else:
         logger.warning(f"Nepoznat object_type_key: {object_type_key} za jezik: {lang_code}")
-        context.user_data['object_type'] = "N/A - Unknown Object Type" # Fallback tekst
+        context.user_data['object_type'] = "N/A - Unknown Object Type"
 
     logger.info(f"User {update.effective_user.id} selected object type: {context.user_data['object_type']}")
 
@@ -506,7 +488,7 @@ async def ask_for_sketch(update: Update, context):
     """Rukuje odgovorom na pitanje o skici."""
     query = update.callback_query
     await query.answer()
-    lang_code = context.user_data.get('language', 'sr') # Default to 'sr'
+    lang_code = context.user_data.get('language', 'sr')
     
     if query.data == "ask_sketch_yes":
         logger.info(f"User {update.effective_user.id} chose to attach sketch.")
@@ -514,49 +496,47 @@ async def ask_for_sketch(update: Update, context):
         return RECEIVE_SKETCH
     else: # ask_sketch_no
         context.user_data['sketch_info'] = MESSAGES[lang_code]["skip_sketch"]
-        context.user_data['sketch_file_id'] = None # Explicitly set to None if no sketch
+        context.user_data['sketch_file_id'] = None
         logger.info(f"User {update.effective_user.id} chose NOT to attach sketch.")
         await query.edit_message_text(text=MESSAGES[lang_code]["enter_contact_info"])
         return ENTER_CONTACT_INFO
 
 async def receive_sketch(update: Update, context):
     """Prima skicu i traži kontakt podatke."""
-    lang_code = context.user_data.get('language', 'sr') # Default to 'sr'
+    lang_code = context.user_data.get('language', 'sr')
     
     file_id = None
-    file_name = "N/A" # Default filename
+    file_name = "N/A"
     if update.message.document:
         file_id = update.message.document.file_id
         file_name = update.message.document.file_name
         context.user_data['sketch_info'] = f"Korisnik je priložio dokument: {file_name} (File ID: {file_id})"
         logger.info(f"User {update.effective_user.id} uploaded document: {file_name} (ID: {file_id})")
     elif update.message.photo:
-        file_id = update.message.photo[-1].file_id # Uzmi najveću rezoluciju slike
+        file_id = update.message.photo[-1].file_id
         context.user_data['sketch_info'] = f"Korisnik je priložio sliku (File ID: {file_id})"
-        file_name = f"photo_{file_id}.jpg" # Dummy name for logging
+        file_name = f"photo_{file_id}.jpg"
         logger.info(f"User {update.effective_user.id} uploaded photo (ID: {file_id})")
     else:
         logger.warning(f"User {update.effective_user.id} sent message not a document or photo in RECEIVE_SKETCH: {update.message.text}")
-        await update.message.reply_text(MESSAGES[lang_code]["upload_sketch"]) # Ponovi, ako nije ni slika ni dok
+        await update.message.reply_text(MESSAGES[lang_code]["upload_sketch"])
         return RECEIVE_SKETCH
     
-    context.user_data['sketch_file_id'] = file_id # Sačuvaj ID da možeš kasnije da preuzmeš
+    context.user_data['sketch_file_id'] = file_id
     
     await update.message.reply_text(MESSAGES[lang_code]["enter_contact_info"])
     return ENTER_CONTACT_INFO
 
 async def enter_contact_info(update: Update, context):
     """Prima kontakt podatke i šalje upit."""
-    lang_code = context.user_data.get('language', 'sr') # Default to 'sr'
+    lang_code = context.user_data.get('language', 'sr')
     context.user_data['contact_info'] = update.message.text
     user = update.message.from_user
 
-    # Određivanje naslova emaila i primaoca
     service_type = context.user_data.get('service', 'N/A')
     heating_type = context.user_data.get('heating_type', 'N/A')
     country = context.user_data.get('country', 'N/A')
 
-    # PRILAGOĐEN NASLOV EMAILA
     if service_type == "heating" and heating_type == MESSAGES[lang_code]["heating_complete_hp"]:
         subject = f"Novi upit od Telegram bota - KOMPLETNA PONUDA (Grejanje + TP) - {country.upper()}"
     else:
@@ -577,7 +557,6 @@ async def enter_contact_info(update: Update, context):
         body.append(f"Skica objekta: {context.user_data.get('sketch_info', 'Nije prilozena')}")
     elif service_type == "hp":
         body.append(f"Tip toplotne pumpe: {context.user_data.get('hp_type', 'N/A')}")
-        # Za HP u CG nema pitanja o objektu, za Srbiju ima
         if country == "srbija":
             body.append(f"Povrsina objekta: {context.user_data.get('surface', 'N/A')} m²")
             body.append(f"Broj spratova: {context.user_data.get('floors', 'N/A')}")
@@ -586,43 +565,35 @@ async def enter_contact_info(update: Update, context):
 
     body.append(f"Kontakt podaci korisnika: {context.user_data.get('contact_info', 'N/A')}")
     
-    # Kljucna izmena: Spoji listu stringova u jedan string sa prelomima redova
     email_body_string = "\n".join(body) 
 
-    logger.info(f"User {user.id} - Preparing email. Full context.user_data: {context.user_data}") # VAŽNO: Proveri ceo context
-    logger.info(f"Email body content to be sent:\n{email_body_string}") # VAŽNO: Proveri finalni string tela emaila
+    logger.info(f"User {user.id} - Preparing email. Full context.user_data: {context.user_data}")
+    logger.info(f"Email body content to be sent:\n{email_body_string}")
 
-    # Slanje emaila
     try:
         yag = yagmail.SMTP(EMAIL_SENDER_ADDRESS, EMAIL_SENDER_PASSWORD)
         
         recipients = [context.user_data['recipient_email']]
         
-        # Logika za slanje complete_hp ponude i Micromi ako je Srbija
         if service_type == "heating" and heating_type == MESSAGES[lang_code]["heating_complete_hp"]:
             if country == "srbija":
-                # Dodaj Micromu kao primaoca za kompletnu ponudu u Srbiji
                 recipients.append(MICROMA['email'])
                 logger.info(f"Complete HP offer in Serbia: Adding {MICROMA['email']} to recipients.")
-            # Za Crnu Goru, pretpostavljamo da je Instal M jedini kontakt za obe (grejanje i TP)
-            # Ako je potrebna druga logika, dodaj ovde
         
-        # Prilaganje skice ako postoji
         attachments = []
-        temp_file_path = None # Inicijalizacija van bloka da bi bila dostupna za brisanje
+        temp_file_path = None
         if context.user_data.get('sketch_file_id'): 
             try:
                 file_id = context.user_data['sketch_file_id']
                 telegram_file = await context.bot.get_file(file_id)
                 
-                # Određivanje ekstenzije fajla
                 file_extension = ""
+                # Koristi update.message.document ili update.message.photo za odredjivanje ekstenzije
                 if update.message.document:
                     file_extension = os.path.splitext(update.message.document.file_name)[1]
                 elif update.message.photo:
-                    file_extension = ".jpg" # Default za slike
-
-                # Kreiranje privremenog fajla za preuzeti sadržaj
+                    file_extension = ".jpg" # Default for photos, Telegram doesn't provide original name
+                    
                 with tempfile.NamedTemporaryFile(delete=False, suffix=file_extension) as temp_file:
                     temp_file_path = temp_file.name
                 
@@ -631,20 +602,18 @@ async def enter_contact_info(update: Update, context):
                 logger.info(f"Sketch attached: {temp_file_path}")
             except Exception as e:
                 logger.error(f"Greska pri preuzimanju/prilaganju skice za korisnika {user.id}: {e}")
-                email_body_string += "\n\nNAPOMENA: Doslo je do greske prilikom preuzimanja prilozene skice." # Dodaj u telo emaila
-                # Ensure temp_file_path is reset if download failed for safety
-                if 'temp_file_path' in locals() and os.path.exists(temp_file_path):
-                     os.remove(temp_file_path) # Pokušaj obrisati delimično preuzeto
-                attachments = [] # Reset attachments if there was an error
+                email_body_string += "\n\nNAPOMENA: Doslo je do greske prilikom preuzimanja prilozene skice."
+                if 'temp_file_path' in locals() and temp_file_path and os.path.exists(temp_file_path):
+                     os.remove(temp_file_path)
+                attachments = []
         
         yag.send(
             to=recipients,
             bcc=BCC_EMAIL,
             subject=subject,
-            contents=email_body_string, # OVO JE KLJUČNA IZMENA!
+            contents=email_body_string,
             attachments=attachments
         )
-        # Očistiti privremene fajlove ako su kreirani
         if temp_file_path and os.path.exists(temp_file_path):
             os.remove(temp_file_path)
             logger.info(f"Temporary sketch file deleted: {temp_file_path}")
@@ -657,10 +626,8 @@ async def enter_contact_info(update: Update, context):
         else:
             await update.message.reply_text(MESSAGES[lang_code]["thank_you_hp"])
         
-        # Obavestite admina ako je TELEGRAM_ADMIN_ID postavljen
         if ADMIN_TELEGRAM_ID:
             try:
-                # Formatirajte poruku za admina na lepši način
                 admin_message = f"**NOVI UPIT PRIMLJEN!**\n\n" \
                                 f"Od: @{user.username or 'N/A'} (ID: {user.id})\n" \
                                 f"Jezik: {lang_code}\n" \
@@ -675,7 +642,7 @@ async def enter_contact_info(update: Update, context):
                     admin_message += f"Skica: {'Prilozena' if context.user_data.get('sketch_file_id') else 'Nije prilozena'}\n"
                 elif service_type == "hp":
                     admin_message += f"Tip toplotne pumpe: {context.user_data.get('hp_type', 'N/A')}\n"
-                    if country == "srbija":
+                    if country == "srbija": # Only for Serbia HP has these additional details
                         admin_message += f"Povrsina: {context.user_data.get('surface', 'N/A')} m²\n"
                         admin_message += f"Spratovi: {context.user_data.get('floors', 'N/A')}\n"
                         admin_message += f"Vrsta objekta: {context.user_data.get('object_type', 'N/A')}\n"
@@ -697,13 +664,12 @@ async def enter_contact_info(update: Update, context):
         if ADMIN_TELEGRAM_ID:
             await context.bot.send_message(chat_id=ADMIN_TELEGRAM_ID, text=f"GREŠKA PRI SLANJU MAILA! Korisnik @{user.username} (ID: {user.id}) je pokusao da posalje upit, ali je doslo do greske: {e}")
 
-    # Resetovanje konverzacije
     context.user_data.clear()
     return ConversationHandler.END
 
 async def cancel(update: Update, context):
     """Omogućava korisniku da prekine konverzaciju."""
-    lang_code = context.user_data.get('language', 'sr') # Default to 'sr'
+    lang_code = context.user_data.get('language', 'sr')
     logger.info(f"User {update.effective_user.id} cancelled conversation.")
     await update.message.reply_text(MESSAGES[lang_code]["start_over"])
     context.user_data.clear()
@@ -711,13 +677,11 @@ async def cancel(update: Update, context):
 
 async def fallback(update: Update, context):
     """Hvata neprepoznate poruke."""
-    lang_code = context.user_data.get('language', 'sr') # Default to 'sr'
+    lang_code = context.user_data.get('language', 'sr')
     logger.warning(f"User {update.effective_user.id} sent unknown message: {update.message.text}")
     await update.message.reply_text(MESSAGES[lang_code]["choose_option"])
-    # Pokušaj da se vratiš na izbor jezika ili da prekineš konverzaciju
-    context.user_data.clear() # Clear user data to avoid stale states
-    return ConversationHandler.END # Započni novu konverzaciju od početka
-
+    context.user_data.clear()
+    return ConversationHandler.END
 
 async def error_handler(update: Update, context):
     """Log the error and send a message to the user."""
@@ -725,31 +689,29 @@ async def error_handler(update: Update, context):
     lang_code = context.user_data.get('language', 'sr')
     if update.effective_message:
         await update.effective_message.reply_text(MESSAGES[lang_code]["something_went_wrong"])
-    # Clear user data in case of an error to prevent stuck conversations
     context.user_data.clear()
-    return ConversationHandler.END # End conversation to reset state
+    return ConversationHandler.END
 
 
 def main():
     """Pokreće bota."""
     application = Application.builder().token(BOT_TOKEN).build()
 
-    # Conversation Handler za ceo tok bota
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={
             SELECT_LANGUAGE: [CallbackQueryHandler(select_language, pattern="^lang_")],
             SELECT_COUNTRY: [CallbackQueryHandler(select_country, pattern="^country_")],
             SELECT_SERVICE: [CallbackQueryHandler(select_service, pattern="^service_")],
-            SELECT_HEATING_TYPE: [CallbackQueryHandler(select_heating_type, pattern="^type_")],
-            SELECT_HP_TYPE: [CallbackQueryHandler(select_hp_type, pattern="^hp_")], # Dodato stanje za izbor HP tipa
+            SELECT_HEATING_TYPE: [CallbackQueryHandler(select_heating_type, pattern="^(heating_radiators|heating_fancoil|heating_underfloor|heating_underfloor_fancoil|heating_complete_hp)$")], # AŽURIRAN PATTERN
+            SELECT_HP_TYPE: [CallbackQueryHandler(select_hp_type, pattern="^(hp_water_water|hp_air_water)$")], # AŽURIRAN PATTERN
             ENTER_SURFACE: [MessageHandler(filters.TEXT & ~filters.COMMAND, enter_surface)],
             ENTER_FLOORS: [MessageHandler(filters.TEXT & ~filters.COMMAND, enter_floors)],
             SELECT_OBJECT_TYPE: [CallbackQueryHandler(select_object_type, pattern="^object_")],
             ASK_FOR_SKETCH: [CallbackQueryHandler(ask_for_sketch, pattern="^ask_sketch_")],
             RECEIVE_SKETCH: [
                 MessageHandler(filters.PHOTO | filters.Document.ALL & ~filters.COMMAND, receive_sketch),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, fallback) # Omogući korisniku da unese tekst ako greškom nije priložio fajl
+                MessageHandler(filters.TEXT & ~filters.COMMAND, fallback)
             ],
             ENTER_CONTACT_INFO: [MessageHandler(filters.TEXT & ~filters.COMMAND, enter_contact_info)],
         },
@@ -757,9 +719,8 @@ def main():
     )
 
     application.add_handler(conv_handler)
-    application.add_error_handler(error_handler) # Dodaj error handler
+    application.add_error_handler(error_handler)
 
-    # Pokretanje bota (za lokalni razvoj ili webhook ako je WEBHOOK_URL postavljen)
     if WEBHOOK_URL:
         PORT = int(os.environ.get("PORT", "8443"))
         application.run_webhook(
